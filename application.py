@@ -10,7 +10,11 @@ import streamlit_authenticator as stauth
 config = {
     "credentials": {
         "usernames": {
-            "expert1": {"email": "expert1@mail.com", "name": "Expert Comptable 1", "password": "12345"}
+            "expert1": {
+                "email": "expert1@mail.com",
+                "name": "Expert Comptable 1",
+                "password": "$2b$12$XfhW7dqdajwqroGyZZvy1OXill2SBS8d81WxazZibgiA8WttfCvHG"  # hash
+            }
         }
     },
     "cookie": {"expiry_days": 1, "key": "cookie_signature", "name": "auth_cookie"},
