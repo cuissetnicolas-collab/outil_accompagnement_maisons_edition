@@ -31,8 +31,12 @@ authenticator = stauth.Authenticate(
 )
 
 name, authentication_status, username = authenticator.login(
-    fields=["username", "password"],
-    location="main"
+    fields={
+        'Form name': 'Connexion',
+        'Username': 'Nom d’utilisateur',
+        'Password': 'Mot de passe'
+    },
+    location='main'
 )
 
 if authentication_status:
