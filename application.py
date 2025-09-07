@@ -40,10 +40,8 @@ login_info = authenticator.login(location='sidebar')
 # Gestion des états de login
 # =====================
 if login_info is None:
-    # Formulaire affiché, utilisateur n'a pas encore soumis
     st.info("🔒 Veuillez entrer vos identifiants")
 elif login_info["authentication_status"]:
-    # Utilisateur connecté
     authenticator.logout("Déconnexion", "sidebar")
     st.sidebar.success(f"Bienvenue {login_info['name']} 👋")
 
@@ -189,4 +187,13 @@ elif login_info["authentication_status"]:
             st.download_button(
                 label="📥 Télécharger les écritures (Excel)",
                 data=buffer,
-                file_name="Ecritures_Penn
+                file_name="Ecritures_Pennylane.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
+
+            # Aperçu
+            st.subheader("👀 Aperçu des écritures générées")
+            st.dataframe(df_ecr)
+
+elif login_info["authentication_status"] is False:
+    st.sidebar.error("❌ Identifiants incorrects")
