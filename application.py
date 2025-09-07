@@ -3,6 +3,8 @@ import pandas as pd
 import numpy as np
 from io import BytesIO
 import streamlit_authenticator as stauth
+import importlib.metadata
+st.write("Version streamlit-authenticator :", importlib.metadata.version("streamlit-authenticator"))
 
 # =====================
 # Authentification
