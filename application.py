@@ -4,21 +4,16 @@ import numpy as np
 from io import BytesIO
 import streamlit_authenticator as stauth
 
-st.set_page_config(page_title="Application Pennylane", layout="wide")
-
 # =====================
 # Authentification
 # =====================
-# Génère le hash avec stauth.Hasher(["12345"]).generate()[0]
-hashed_password = "$2b$12$kLKNnTOplTQ4DZVmFJb1YulMxoF1BCGYnH3o.KnQIzW5nbLqV/2ZW"
-
 config = {
     "credentials": {
         "usernames": {
             "expert1": {
                 "email": "expert1@mail.com",
                 "name": "Expert Comptable 1",
-                "password": hashed_password
+                "password": "$2b$12$XfhW7dqdajwqroGyZZvy1OXill2SBS8d81WxazZibgiA8WttfCvHG"  # hash
             }
         }
     },
@@ -33,17 +28,18 @@ authenticator = stauth.Authenticate(
     config['cookie']['expiry_days']
 )
 
-# Login sécurisé
-login_info = authenticator.login(location='sidebar')
+name, authentication_status, username = authenticator.login(
+    fields={
+        'Form name': 'Connexion',
+        'Username': 'Identifiant',
+        'Password': 'Mot de passe'
+    },
+    location='main'
+)
 
-# =====================
-# Gestion des états de login
-# =====================
-if login_info is None:
-    st.info("🔒 Veuillez entrer vos identifiants")
-elif login_info["authentication_status"]:
+if authentication_status:
     authenticator.logout("Déconnexion", "sidebar")
-    st.sidebar.success(f"Bienvenue {login_info['name']} 👋")
+    st.sidebar.success(f"Bienvenue {name} 👋")
 
     # =====================
     # Menu
@@ -195,5 +191,7 @@ elif login_info["authentication_status"]:
             st.subheader("👀 Aperçu des écritures générées")
             st.dataframe(df_ecr)
 
-elif login_info["authentication_status"] is False:
-    st.sidebar.error("❌ Identifiants incorrects")
+elif authentication_status is False:
+    st.error("❌ Identifiants incorrects")
+elif authentication_status is None:
+    st.warning("🔑 Veuillez entrer vos identifiants")
