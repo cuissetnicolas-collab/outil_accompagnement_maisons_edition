@@ -33,7 +33,7 @@ authenticator = stauth.Authenticate(
 name, authentication_status, username = authenticator.login(
     fields={
         'Form name': 'Connexion',
-        'Username': 'Nom d’utilisateur',
+        'Username': 'Identifiant',
         'Password': 'Mot de passe'
     },
     location='main'
