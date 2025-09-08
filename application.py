@@ -13,7 +13,7 @@ config = {
             "expert1": {
                 "name": "Expert Comptable 1",
                 "email": "expert1@mail.com",
-                # Hash du mot de passe '12345'
+                # hash du mot de passe
                 "password": "$2b$12$XfhW7dqdajwqroGyZZvy1OXill2SBS8d81WxazZibgiA8WttfCvHG"
             }
         }
@@ -31,10 +31,7 @@ authenticator = stauth.Authenticate(
 # =====================
 # Login
 # =====================
-name, username, authenticated = authenticator.login(
-    name="Connexion",
-    location="main"
-)
+name, username, authenticated = authenticator.login()
 
 if authenticated:
     st.sidebar.success(f"Bienvenue {name} 👋")
