@@ -31,12 +31,11 @@ authenticator = stauth.Authenticate(
 # =====================
 # Login (0.4.2)
 # =====================
-name, authentication_status, username = authenticator.login(
-    name="Connexion",   # Titre du formulaire
-    location="main"     # Emplacement du formulaire
-)
+login_form = authenticator.login(location="main")
 
-if authentication_status:
+if login_form.authenticated:
+    name = login_form.name
+    username = login_form.username
     authenticator.logout("Déconnexion", "sidebar")
     st.sidebar.success(f"Bienvenue {name} 👋")
 
@@ -190,7 +189,7 @@ if authentication_status:
             st.subheader("👀 Aperçu des écritures générées")
             st.dataframe(df_ecr)
 
-elif authentication_status is False:
+elif login_form.failed:
     st.error("❌ Identifiants incorrects")
-elif authentication_status is None:
+elif login_form.not_authenticated:
     st.warning("🔑 Veuillez entrer vos identifiants")
