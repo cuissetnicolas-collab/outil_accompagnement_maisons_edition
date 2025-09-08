@@ -28,18 +28,10 @@ authenticator = stauth.Authenticate(
 )
 
 # =====================
-# Login Form (0.4.2)
+# Login
 # =====================
-login_info = authenticator.login_form(
-    location="main", 
-    preauthorized=False,
-    name_label="Nom complet",
-    username_label="Identifiant",
-    password_label="Mot de passe",
-    submit_label="Se connecter"
-)
+login_info = authenticator.login(location="main")  # "main" ou "sidebar"
 
-# login_info retourne un dictionnaire ou None
 if login_info is not None:
     authentication_status = login_info["authentication_status"]
     username = login_info["username"]
@@ -199,7 +191,7 @@ if login_info is not None:
                 st.subheader("👀 Aperçu des écritures générées")
                 st.dataframe(df_ecr)
 
-    elif authentication_status is False:
-        st.error("❌ Identifiants incorrects")
-    else:
-        st.warning("🔑 Veuillez entrer vos identifiants")
+elif login_info is False:
+    st.error("❌ Identifiants incorrects")
+else:
+    st.warning("🔑 Veuillez entrer vos identifiants")
