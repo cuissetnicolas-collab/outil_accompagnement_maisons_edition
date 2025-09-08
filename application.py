@@ -30,7 +30,7 @@ authenticator = stauth.Authenticate(
 # =====================
 # Login
 # =====================
-authentication_status = authenticator.login("Connexion")  # True / False / None
+authentication_status = authenticator.login("Connexion", location="main")  # <-- Correctif ici
 username = authenticator.username
 
 # =====================
