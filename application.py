@@ -31,7 +31,10 @@ authenticator = stauth.Authenticate(
 # =====================
 # Login
 # =====================
-name, username, authenticated = authenticator.login("Connexion", "main")
+name, username, authenticated = authenticator.login(
+    name="Connexion",
+    location="main"
+)
 
 if authenticated:
     st.sidebar.success(f"Bienvenue {name} 👋")
