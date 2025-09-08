@@ -29,12 +29,14 @@ authenticator = stauth.Authenticate(
 )
 
 # =====================
+# Titre personnalisé
+# =====================
+st.title("Connexion")
+
+# =====================
 # Login
 # =====================
-name, authentication_status, username = authenticator.login(
-    "Connexion",
-    location="main"  # obligatoire en 0.4.2 : "main" ou "sidebar"
-)
+name, authentication_status, username = authenticator.login(location="main")
 
 if authentication_status:
     authenticator.logout("Déconnexion", "sidebar")
