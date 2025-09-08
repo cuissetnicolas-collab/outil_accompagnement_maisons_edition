@@ -31,10 +31,10 @@ authenticator = stauth.Authenticate(
 # =====================
 # Login
 # =====================
-name, username, authenticated = authenticator.login()
+authenticator.login()  # pas de unpack !
 
-if authenticated:
-    st.sidebar.success(f"Bienvenue {name} 👋")
+if authenticator.authenticated:
+    st.sidebar.success(f"Bienvenue {authenticator.name} 👋")
     authenticator.logout("Déconnexion", "sidebar")
 
     # =====================
@@ -187,7 +187,7 @@ if authenticated:
             st.subheader("👀 Aperçu des écritures générées")
             st.dataframe(df_ecr)
 
-elif authenticated is False:
+elif authenticator.authenticated is False:
     st.error("❌ Identifiants incorrects")
 else:
     st.warning("🔑 Veuillez entrer vos identifiants")
