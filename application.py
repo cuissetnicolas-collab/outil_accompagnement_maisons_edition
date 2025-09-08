@@ -31,13 +31,7 @@ authenticator = stauth.Authenticate(
 # =====================
 # Login
 # =====================
-name, authentication_status, username = authenticator.login(
-    "Connexion",                       # titre du formulaire
-    "main",                            # emplacement
-    name_label="Nom complet",
-    username_label="Identifiant",
-    password_label="Mot de passe"
-)
+name, authentication_status, username = authenticator.login("Connexion")
 
 if authentication_status:
     authenticator.logout("Déconnexion", "sidebar")
