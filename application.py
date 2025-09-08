@@ -17,9 +17,16 @@ config = {
             }
         }
     },
-    "cookie": {"name": "auth_cookie", "key": "my_secret_signature_123", "expiry_days": 1},
+    "cookie": {
+        "name": "auth_cookie",           # pas d'espaces ni caractères spéciaux
+        "key": "Ff9a3H7!2k8L0qZx4r1mP", # clé longue et unique
+        "expiry_days": 1
+    }
 }
 
+# =====================
+# Initialisation Authenticator
+# =====================
 authenticator = stauth.Authenticate(
     credentials=config['credentials'],
     cookie_name=config['cookie']['name'],
@@ -191,7 +198,9 @@ if login_info is not None:
                 st.subheader("👀 Aperçu des écritures générées")
                 st.dataframe(df_ecr)
 
-elif login_info is False:
-    st.error("❌ Identifiants incorrects")
+    elif authentication_status is False:
+        st.error("❌ Identifiants incorrects")
+    else:
+        st.warning("🔑 Veuillez entrer vos identifiants")
 else:
     st.warning("🔑 Veuillez entrer vos identifiants")
