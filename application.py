@@ -28,13 +28,9 @@ authenticator = stauth.Authenticate(
 )
 
 # =====================
-# Login avec labels personnalisés
+# Formulaire login
 # =====================
-login_info = authenticator.login(
-    name="Connexion",        # titre du formulaire
-    location="main",         # emplacement : "main" ou "sidebar"
-    preauthorized=False      # obligatoire
-)
+login_info = authenticator.login_form(location="main")  # Méthode correcte pour 0.4.2
 
 # =====================
 # Vérification du login
