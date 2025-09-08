@@ -28,13 +28,12 @@ authenticator = stauth.Authenticate(
     config['cookie']['expiry_days']
 )
 
+# =====================
+# Login (0.4.2)
+# =====================
 name, authentication_status, username = authenticator.login(
-    fields={
-        'Form name': 'Connexion',
-        'Username': 'Identifiant',
-        'Password': 'Mot de passe'
-    },
-    location='main'
+    "Connexion",
+    location="main"
 )
 
 if authentication_status:
