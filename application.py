@@ -11,7 +11,7 @@ config = {
     "credentials": {
         "usernames": {
             "aurore": {
-                "email": "expert1@mail.com",
+                "email": "aurore@mail.com",
                 "name": "Aurore",
                 "password": "$2b$12$0YJsXO10AeOjeI1Z/qf2SufNMhsu51UClL2YtNGUahK8LZhpjkxBy"  # hash
             }
