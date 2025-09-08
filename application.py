@@ -10,7 +10,7 @@ import streamlit_authenticator as stauth
 config = {
     "credentials": {
         "usernames": {
-            "aurore": {
+            "expert1": {
                 "email": "aurore@mail.com",
                 "name": "Aurore",
                 "password": "$2b$12$cGtI46r5/fAWouzVGXxOke0ja9BgEzWhiSmDFBu9BR5u4i7dmFCMW"  # hash
