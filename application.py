@@ -10,10 +10,8 @@ if "login" not in st.session_state:
     st.session_state["login"] = False
 
 def login(username, password):
-    # Vérification des identifiants
     users = {
         "aurore": {"password": "12345", "name": "Aurore Demoulin"},
-        # Tu peux ajouter d'autres utilisateurs ici
     }
     if username in users and password == users[username]["password"]:
         st.session_state["login"] = True
@@ -32,9 +30,6 @@ if not st.session_state["login"]:
         else:
             st.error("❌ Identifiants incorrects")
 else:
-    # =====================
-    # Menu et interface principale
-    # =====================
     st.sidebar.success(f"Bienvenue {st.session_state['name']} 👋")
     if st.sidebar.button("Déconnexion"):
         st.session_state["login"] = False
@@ -97,11 +92,10 @@ else:
             df["Commission_distribution"] = (cents_floor + adjust) / 100.0
 
             # ----- Diffusion -----
-            raw_diff = df["Net"] * taux_diff
-            sum_raw_diff = raw_diff.sum()
-            scaled_diff = raw_diff * (com_diffusion_total / sum_raw_diff)
-            cents_floor = np.floor(scaled_diff * 100).astype(int)
-            remainders = (scaled_diff * 100) - cents_floor
+            # Calcul proportionnel au Net BLDD (grossistes déjà exclus)
+            df["Commission_diffusion"] = df["Net"] * (com_diffusion_total / df["Net"].sum())
+            cents_floor = np.floor(df["Commission_diffusion"] * 100).astype(int)
+            remainders = (df["Commission_diffusion"] * 100) - cents_floor
             target_cents = int(round(com_diffusion_total * 100))
             diff = target_cents - cents_floor.sum()
             idx_sorted = np.argsort(-remainders.values)
