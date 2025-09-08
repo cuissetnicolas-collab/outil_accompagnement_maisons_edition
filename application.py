@@ -5,45 +5,39 @@ from io import BytesIO
 import streamlit_authenticator as stauth
 
 # =====================
-# Configuration des utilisateurs
+# Authentification
 # =====================
 config = {
     "credentials": {
         "usernames": {
-            "Nicolas": {  # login
-                "email": "nicolas@mail.com",
-                "name": "Nicolas",  # nom affiché
-                # mot de passe hashé pour "12345"
-                "password": "$2b$12$cGtI46r5/fAWouzVGXxOke0ja9BgEzWhiSmDFBu9BR5u4i7dmFCMW"
+            "expert1": {
+                "email": "expert1@mail.com",
+                "name": "Expert Comptable 1",
+                "password": "$2b$12$XfhW7dqdajwqroGyZZvy1OXill2SBS8d81WxazZibgiA8WttfCvHG"  # hash
             }
         }
     },
-    "cookie": {
-        "expiry_days": 1,
-        "key": "cookie_signature",
-        "name": "auth_cookie"
-    },
+    "cookie": {"expiry_days": 1, "key": "cookie_signature", "name": "auth_cookie"},
     "preauthorized": {}
 }
 
-# =====================
-# Authentificateur
-# =====================
 authenticator = stauth.Authenticate(
-    credentials=config['credentials'],
-    cookie_name=config['cookie']['name'],
-    key=config['cookie']['key'],
-    cookie_expiry_days=config['cookie']['expiry_days'],
-    preauthorized=config.get('preauthorized', {})
+    config['credentials'],
+    config['cookie']['name'],
+    config['cookie']['key'],
+    config['cookie']['expiry_days']
 )
 
-# =====================
-# Login
-# =====================
-name, authentication_status, username = authenticator.login("Connexion", "unrendered")
+name, authentication_status, username = authenticator.login(
+    fields={
+        'Form name': 'Connexion',
+        'Username': 'Identifiant',
+        'Password': 'Mot de passe'
+    },
+    location='main'
+)
 
 if authentication_status:
-
     authenticator.logout("Déconnexion", "sidebar")
     st.sidebar.success(f"Bienvenue {name} 👋")
 
