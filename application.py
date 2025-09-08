@@ -13,7 +13,6 @@ config = {
             "expert1": {
                 "name": "Expert Comptable 1",
                 "email": "expert1@mail.com",
-                # hash du mot de passe
                 "password": "$2b$12$XfhW7dqdajwqroGyZZvy1OXill2SBS8d81WxazZibgiA8WttfCvHG"
             }
         }
@@ -29,11 +28,18 @@ authenticator = stauth.Authenticate(
 )
 
 # =====================
-# Login
+# Login avec labels personnalisés
 # =====================
-login_info = authenticator.login()  # retourne dict ou None
+login_info = authenticator.login(
+    "Connexion",        # titre du formulaire
+    "main",             # emplacement : "main" ou "sidebar"
+    preauthorized=False # obligatoire pour que le formulaire fonctionne
+)
 
-if login_info is not None:
+# =====================
+# Vérification du login
+# =====================
+if login_info:
     if login_info["authentication_status"]:
         st.sidebar.success(f"Bienvenue {login_info['name']} 👋")
         authenticator.logout("Déconnexion", "sidebar")
