@@ -12,7 +12,7 @@ config = {
         "usernames": {
             "Aurore": {
                 "email": "expert1@mail.com",
-                "name": "Aurore",
+                "name": "Aurore Demoulin",
                 "password": "$2b$12$XfhW7dqdajwqroGyZZvy1OXill2SBS8d81WxazZibgiA8WttfCvHG"  # hash
             }
         }
