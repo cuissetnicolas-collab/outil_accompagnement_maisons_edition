@@ -36,14 +36,14 @@ st.title("Connexion")
 # =====================
 # Login
 # =====================
-authenticator.login(location="main")
+login_info = authenticator.login(location="main")
 
 # =====================
 # Vérification statut
 # =====================
-if authenticator.authentication_status:
+if login_info and login_info.get("authentication_status"):
     authenticator.logout("Déconnexion", "sidebar")
-    st.sidebar.success(f"Bienvenue {authenticator.name} 👋")
+    st.sidebar.success(f"Bienvenue {login_info.get('name')} 👋")
 
     # =====================
     # Menu
@@ -195,7 +195,7 @@ if authenticator.authentication_status:
             st.subheader("👀 Aperçu des écritures générées")
             st.dataframe(df_ecr)
 
-elif authenticator.authentication_status is False:
+elif login_info and login_info.get("authentication_status") is False:
     st.error("❌ Identifiants incorrects")
-elif authenticator.authentication_status is None:
+else:
     st.warning("🔑 Veuillez entrer vos identifiants")
