@@ -13,7 +13,7 @@ config = {
             "aurore": {
                 "email": "expert1@mail.com",
                 "name": "Aurore",
-                "password": "$2b$12$fZk9ZSW9hb2TGiddTFEAE.Rugk3wWyfsy1WMUIyuX5cst2J9/YS0q"  # hash
+                "password": "$2b$12$0YJsXO10AeOjeI1Z/qf2SufNMhsu51UClL2YtNGUahK8LZhpjkxBy"  # hash
             }
         }
     },
