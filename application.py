@@ -32,8 +32,8 @@ authenticator = stauth.Authenticate(
 # Login (0.4.2)
 # =====================
 name, authentication_status, username = authenticator.login(
-    "Connexion",
-    location="main"
+    name="Connexion",   # Titre du formulaire
+    location="main"     # Emplacement du formulaire
 )
 
 if authentication_status:
