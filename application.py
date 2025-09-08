@@ -12,7 +12,7 @@ if "login" not in st.session_state:
 def login(username, password):
     # Vérification des identifiants
     users = {
-        "expert1": {"password": "12345", "name": "Expert Comptable 1"},
+        "aurore": {"password": "12345", "name": "Aurore Demoulin"},
         # Tu peux ajouter d'autres utilisateurs ici
     }
     if username in users and password == users[username]["password"]:
