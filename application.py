@@ -2,205 +2,187 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 from io import BytesIO
-import streamlit_authenticator as stauth
 
 # =====================
-# Configuration Authentification
+# Création du login manuel
 # =====================
-config = {
-    "credentials": {
-        "usernames": {
-            "expert1": {
-                "name": "Expert Comptable 1",
-                "email": "expert1@mail.com",
-                "password": "$2b$12$XfhW7dqdajwqroGyZZvy1OXill2SBS8d81WxazZibgiA8WttfCvHG"
-            }
-        }
-    },
-    "cookie": {
-        "name": "auth_cookie",           # pas d'espaces ni caractères spéciaux
-        "key": "Ff9a3H7!2k8L0qZx4r1mP", # clé longue et unique
-        "expiry_days": 1
+if "login" not in st.session_state:
+    st.session_state["login"] = False
+
+def login(username, password):
+    # Vérification des identifiants
+    users = {
+        "expert1": {"password": "12345", "name": "Expert Comptable 1"},
+        # Tu peux ajouter d'autres utilisateurs ici
     }
-}
+    if username in users and password == users[username]["password"]:
+        st.session_state["login"] = True
+        st.session_state["username"] = username
+        st.session_state["name"] = users[username]["name"]
+        return True
+    return False
 
-# =====================
-# Initialisation Authenticator
-# =====================
-authenticator = stauth.Authenticate(
-    credentials=config['credentials'],
-    cookie_name=config['cookie']['name'],
-    key=config['cookie']['key'],
-    cookie_expiry_days=config['cookie']['expiry_days']
-)
+if not st.session_state["login"]:
+    st.title("🔑 Veuillez entrer vos identifiants")
+    username_input = st.text_input("Identifiant")
+    password_input = st.text_input("Mot de passe", type="password")
+    if st.button("Connexion"):
+        if login(username_input, password_input):
+            st.success(f"Bienvenue {st.session_state['name']} 👋")
+        else:
+            st.error("❌ Identifiants incorrects")
+else:
+    # =====================
+    # Menu et interface principale
+    # =====================
+    st.sidebar.success(f"Bienvenue {st.session_state['name']} 👋")
+    if st.sidebar.button("Déconnexion"):
+        st.session_state["login"] = False
+        st.experimental_rerun()
 
-# =====================
-# Login
-# =====================
-login_info = authenticator.login(location="main")  # "main" ou "sidebar"
+    menu = ["Générateur d'écritures analytiques", "Tableau analytique"]
+    choix = st.sidebar.radio("Menu", menu)
 
-if login_info is not None:
-    authentication_status = login_info["authentication_status"]
-    username = login_info["username"]
-    name = login_info["name"]
+    # =====================
+    # Champs communs
+    # =====================
+    date_ecriture = st.date_input("📅 Date d'écriture")
+    journal = st.text_input("📒 Journal", value="VT")
+    libelle_base = st.text_input("📝 Libellé", value="VENTES BLDD")
 
-    if authentication_status:
-        st.sidebar.success(f"Bienvenue {name} 👋")
-        authenticator.logout("Déconnexion", "sidebar")
+    compte_ca = st.text_input("💰 Compte CA", value="70110000")
+    compte_com_dist = st.text_input("💰 Compte commissions distribution", value="62280000")
+    compte_com_diff = st.text_input("💰 Compte commissions diffusion", value="62280001")
 
-        # =====================
-        # Menu
-        # =====================
-        menu = ["Générateur d'écritures analytiques", "Tableau analytique"]
-        choix = st.sidebar.radio("Menu", menu)
+    taux_dist = st.number_input("Taux distribution (%)", value=12.5) / 100
+    taux_diff = st.number_input("Taux diffusion (%)", value=9.0) / 100
 
-        # =====================
-        # Champs communs
-        # =====================
-        date_ecriture = st.date_input("📅 Date d'écriture")
-        journal = st.text_input("📒 Journal", value="VT")
-        libelle_base = st.text_input("📝 Libellé", value="VENTES BLDD")
+    com_distribution_total = st.number_input("Montant total commissions distribution", value=1000.00, format="%.2f")
+    com_diffusion_total = st.number_input("Montant total commissions diffusion", value=500.00, format="%.2f")
 
-        compte_ca = st.text_input("💰 Compte CA", value="70110000")
-        compte_com_dist = st.text_input("💰 Compte commissions distribution", value="62280000")
-        compte_com_diff = st.text_input("💰 Compte commissions diffusion", value="62280001")
+    # =====================
+    # Upload fichier
+    # =====================
+    fichier_entree = st.file_uploader("📂 Importer le fichier Excel BLDD", type=["xlsx"])
 
-        taux_dist = st.number_input("Taux distribution (%)", value=12.5) / 100
-        taux_diff = st.number_input("Taux diffusion (%)", value=9.0) / 100
+    if fichier_entree is not None:
+        df = pd.read_excel(fichier_entree, header=9, dtype={"ISBN": str})
+        df.columns = df.columns.str.strip()
+        df = df.dropna(subset=["ISBN"]).copy()
+        df["ISBN"] = df["ISBN"].astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
+        df["ISBN"] = df["ISBN"].str.replace('-', '', regex=False).str.replace(' ', '', regex=False)
 
-        com_distribution_total = st.number_input("Montant total commissions distribution", value=1000.00, format="%.2f")
-        com_diffusion_total = st.number_input("Montant total commissions diffusion", value=500.00, format="%.2f")
+        for c in ["Vente", "Net", "Facture"]:
+            df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0).round(2)
 
-        # =====================
-        # Upload fichier
-        # =====================
-        fichier_entree = st.file_uploader("📂 Importer le fichier Excel BLDD", type=["xlsx"])
+        if choix == "Tableau analytique":
+            st.subheader("📊 Aperçu des données BLDD")
+            st.dataframe(df)
 
-        if fichier_entree is not None:
-            df = pd.read_excel(fichier_entree, header=9, dtype={"ISBN": str})
-            df.columns = df.columns.str.strip()
-            df = df.dropna(subset=["ISBN"]).copy()
-            df["ISBN"] = df["ISBN"].astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
-            df["ISBN"] = df["ISBN"].str.replace('-', '', regex=False).str.replace(' ', '', regex=False)
+        elif choix == "Générateur d'écritures analytiques":
+            # ----- Distribution -----
+            raw_dist = df["Vente"] * taux_dist
+            sum_raw_dist = raw_dist.sum()
+            scaled_dist = raw_dist * (com_distribution_total / sum_raw_dist)
+            cents_floor = np.floor(scaled_dist * 100).astype(int)
+            remainders = (scaled_dist * 100) - cents_floor
+            target_cents = int(round(com_distribution_total * 100))
+            diff = target_cents - cents_floor.sum()
+            idx_sorted = np.argsort(-remainders.values)
+            adjust = np.zeros(len(df), dtype=int)
+            if diff > 0:
+                adjust[idx_sorted[:diff]] = 1
+            elif diff < 0:
+                adjust[idx_sorted[len(df)+diff:]] = -1
+            df["Commission_distribution"] = (cents_floor + adjust) / 100.0
 
-            for c in ["Vente", "Net", "Facture"]:
-                df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0).round(2)
+            # ----- Diffusion -----
+            raw_diff = df["Net"] * taux_diff
+            sum_raw_diff = raw_diff.sum()
+            scaled_diff = raw_diff * (com_diffusion_total / sum_raw_diff)
+            cents_floor = np.floor(scaled_diff * 100).astype(int)
+            remainders = (scaled_diff * 100) - cents_floor
+            target_cents = int(round(com_diffusion_total * 100))
+            diff = target_cents - cents_floor.sum()
+            idx_sorted = np.argsort(-remainders.values)
+            adjust = np.zeros(len(df), dtype=int)
+            if diff > 0:
+                adjust[idx_sorted[:diff]] = 1
+            elif diff < 0:
+                adjust[idx_sorted[len(df)+diff:]] = -1
+            df["Commission_diffusion"] = (cents_floor + adjust) / 100.0
 
-            if choix == "Tableau analytique":
-                st.subheader("📊 Aperçu des données BLDD")
-                st.dataframe(df)
+            # ----- Construction écritures -----
+            ecritures = []
+            total_facture_global = df["Facture"].sum().round(2)
 
-            elif choix == "Générateur d'écritures analytiques":
-                # ----- Distribution -----
-                raw_dist = df["Vente"] * taux_dist
-                sum_raw_dist = raw_dist.sum()
-                scaled_dist = raw_dist * (com_distribution_total / sum_raw_dist)
-                cents_floor = np.floor(scaled_dist * 100).astype(int)
-                remainders = (scaled_dist * 100) - cents_floor
-                target_cents = int(round(com_distribution_total * 100))
-                diff = target_cents - cents_floor.sum()
-                idx_sorted = np.argsort(-remainders.values)
-                adjust = np.zeros(len(df), dtype=int)
-                if diff > 0:
-                    adjust[idx_sorted[:diff]] = 1
-                elif diff < 0:
-                    adjust[idx_sorted[len(df)+diff:]] = -1
-                df["Commission_distribution"] = (cents_floor + adjust) / 100.0
+            # CA global
+            ecritures.append({
+                "Date": date_ecriture.strftime("%d/%m/%Y"), "Journal": journal, "Compte": compte_ca,
+                "Libelle": f"{libelle_base} - CA global", "ISBN": "",
+                "Débit": total_facture_global, "Crédit": 0.0
+            })
 
-                # ----- Diffusion -----
-                raw_diff = df["Net"] * taux_diff
-                sum_raw_diff = raw_diff.sum()
-                scaled_diff = raw_diff * (com_diffusion_total / sum_raw_diff)
-                cents_floor = np.floor(scaled_diff * 100).astype(int)
-                remainders = (scaled_diff * 100) - cents_floor
-                target_cents = int(round(com_diffusion_total * 100))
-                diff = target_cents - cents_floor.sum()
-                idx_sorted = np.argsort(-remainders.values)
-                adjust = np.zeros(len(df), dtype=int)
-                if diff > 0:
-                    adjust[idx_sorted[:diff]] = 1
-                elif diff < 0:
-                    adjust[idx_sorted[len(df)+diff:]] = -1
-                df["Commission_diffusion"] = (cents_floor + adjust) / 100.0
-
-                # ----- Construction écritures -----
-                ecritures = []
-                total_facture_global = df["Facture"].sum().round(2)
-
-                # CA global
+            # CA par ISBN
+            for _, r in df.iterrows():
                 ecritures.append({
                     "Date": date_ecriture.strftime("%d/%m/%Y"), "Journal": journal, "Compte": compte_ca,
-                    "Libelle": f"{libelle_base} - CA global", "ISBN": "",
-                    "Débit": total_facture_global, "Crédit": 0.0
+                    "Libelle": f"{libelle_base} - CA ISBN", "ISBN": r["ISBN"],
+                    "Débit": 0.0, "Crédit": round(float(r["Facture"]), 2)
                 })
 
-                # CA par ISBN
-                for _, r in df.iterrows():
-                    ecritures.append({
-                        "Date": date_ecriture.strftime("%d/%m/%Y"), "Journal": journal, "Compte": compte_ca,
-                        "Libelle": f"{libelle_base} - CA ISBN", "ISBN": r["ISBN"],
-                        "Débit": 0.0, "Crédit": round(float(r["Facture"]), 2)
-                    })
-
-                # Commissions distribution
-                total_dist = df["Commission_distribution"].sum().round(2)
+            # Commissions distribution
+            total_dist = df["Commission_distribution"].sum().round(2)
+            ecritures.append({
+                "Date": date_ecriture.strftime("%d/%m/%Y"), "Journal": journal, "Compte": compte_com_dist,
+                "Libelle": f"{libelle_base} - Com. distribution global", "ISBN": "",
+                "Débit": 0.0, "Crédit": total_dist
+            })
+            for _, r in df.iterrows():
                 ecritures.append({
                     "Date": date_ecriture.strftime("%d/%m/%Y"), "Journal": journal, "Compte": compte_com_dist,
-                    "Libelle": f"{libelle_base} - Com. distribution global", "ISBN": "",
-                    "Débit": 0.0, "Crédit": total_dist
+                    "Libelle": f"{libelle_base} - Com. distribution ISBN", "ISBN": r["ISBN"],
+                    "Débit": round(float(r["Commission_distribution"]), 2), "Crédit": 0.0
                 })
-                for _, r in df.iterrows():
-                    ecritures.append({
-                        "Date": date_ecriture.strftime("%d/%m/%Y"), "Journal": journal, "Compte": compte_com_dist,
-                        "Libelle": f"{libelle_base} - Com. distribution ISBN", "ISBN": r["ISBN"],
-                        "Débit": round(float(r["Commission_distribution"]), 2), "Crédit": 0.0
-                    })
 
-                # Commissions diffusion
-                total_diff = df["Commission_diffusion"].sum().round(2)
+            # Commissions diffusion
+            total_diff = df["Commission_diffusion"].sum().round(2)
+            ecritures.append({
+                "Date": date_ecriture.strftime("%d/%m/%Y"), "Journal": journal, "Compte": compte_com_diff,
+                "Libelle": f"{libelle_base} - Com. diffusion global", "ISBN": "",
+                "Débit": 0.0, "Crédit": total_diff
+            })
+            for _, r in df.iterrows():
                 ecritures.append({
                     "Date": date_ecriture.strftime("%d/%m/%Y"), "Journal": journal, "Compte": compte_com_diff,
-                    "Libelle": f"{libelle_base} - Com. diffusion global", "ISBN": "",
-                    "Débit": 0.0, "Crédit": total_diff
+                    "Libelle": f"{libelle_base} - Com. diffusion ISBN", "ISBN": r["ISBN"],
+                    "Débit": round(float(r["Commission_diffusion"]), 2), "Crédit": 0.0
                 })
-                for _, r in df.iterrows():
-                    ecritures.append({
-                        "Date": date_ecriture.strftime("%d/%m/%Y"), "Journal": journal, "Compte": compte_com_diff,
-                        "Libelle": f"{libelle_base} - Com. diffusion ISBN", "ISBN": r["ISBN"],
-                        "Débit": round(float(r["Commission_diffusion"]), 2), "Crédit": 0.0
-                    })
 
-                df_ecr = pd.DataFrame(ecritures)
+            df_ecr = pd.DataFrame(ecritures)
 
-                # Vérification équilibre
-                total_debit = round(df_ecr["Débit"].sum(), 2)
-                total_credit = round(df_ecr["Crédit"].sum(), 2)
+            # Vérification équilibre
+            total_debit = round(df_ecr["Débit"].sum(), 2)
+            total_credit = round(df_ecr["Crédit"].sum(), 2)
 
-                if total_debit != total_credit:
-                    st.error(f"⚠️ Écriture déséquilibrée : Débit={total_debit}, Crédit={total_credit}")
-                else:
-                    st.success("✅ Écritures équilibrées !")
+            if total_debit != total_credit:
+                st.error(f"⚠️ Écriture déséquilibrée : Débit={total_debit}, Crédit={total_credit}")
+            else:
+                st.success("✅ Écritures équilibrées !")
 
-                # Export Excel
-                buffer = BytesIO()
-                with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
-                    df_ecr.to_excel(writer, index=False, sheet_name="Ecritures")
-                buffer.seek(0)
+            # Export Excel
+            buffer = BytesIO()
+            with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+                df_ecr.to_excel(writer, index=False, sheet_name="Ecritures")
+            buffer.seek(0)
 
-                st.download_button(
-                    label="📥 Télécharger les écritures (Excel)",
-                    data=buffer,
-                    file_name="Ecritures_Pennylane.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                )
+            st.download_button(
+                label="📥 Télécharger les écritures (Excel)",
+                data=buffer,
+                file_name="Ecritures_Pennylane.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
 
-                # Aperçu
-                st.subheader("👀 Aperçu des écritures générées")
-                st.dataframe(df_ecr)
-
-    elif authentication_status is False:
-        st.error("❌ Identifiants incorrects")
-    else:
-        st.warning("🔑 Veuillez entrer vos identifiants")
-else:
-    st.warning("🔑 Veuillez entrer vos identifiants")
+            # Aperçu
+            st.subheader("👀 Aperçu des écritures générées")
+            st.dataframe(df_ecr)
