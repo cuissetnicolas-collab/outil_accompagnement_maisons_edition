@@ -40,7 +40,10 @@ authenticator = stauth.Authenticate(
 # =====================
 # Login
 # =====================
-name, authentication_status, username = authenticator.login("Connexion", "main")
+name, authentication_status, username = authenticator.login(
+    "Connexion",
+    location="main"
+)
 
 if authentication_status:
 
