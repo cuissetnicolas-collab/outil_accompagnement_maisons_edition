@@ -31,9 +31,9 @@ authenticator = stauth.Authenticate(
 # Login avec labels personnalisés
 # =====================
 login_info = authenticator.login(
-    "Connexion",        # titre du formulaire
-    "main",             # emplacement : "main" ou "sidebar"
-    preauthorized=False # obligatoire pour que le formulaire fonctionne
+    name="Connexion",        # titre du formulaire
+    location="main",         # emplacement : "main" ou "sidebar"
+    preauthorized=False      # obligatoire
 )
 
 # =====================
