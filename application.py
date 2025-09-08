@@ -5,22 +5,30 @@ from io import BytesIO
 import streamlit_authenticator as stauth
 
 # =====================
-# Authentification
+# Configuration des utilisateurs
 # =====================
 config = {
     "credentials": {
         "usernames": {
-            "expert1": {
+            "Nicolas": {
                 "email": "nicolas@mail.com",
                 "name": "Nicolas",
-                "password": "$2b$12$LLAsZmx0All4AoGh5xuXC.VnHCGnEQbOS/d19qmcd9mqzclUIzD26"  # hash
+                # hash du mot de passe "12345"
+                "password": "$2b$12$cGtI46r5/fAWouzVGXxOke0ja9BgEzWhiSmDFBu9BR5u4i7dmFCMW"
             }
         }
     },
-    "cookie": {"expiry_days": 1, "key": "cookie_signature", "name": "auth_cookie"},
+    "cookie": {
+        "expiry_days": 1,
+        "key": "cookie_signature",
+        "name": "auth_cookie"
+    },
     "preauthorized": {}
 }
 
+# =====================
+# Authentificateur
+# =====================
 authenticator = stauth.Authenticate(
     credentials=config['credentials'],
     cookie_name=config['cookie']['name'],
@@ -29,9 +37,13 @@ authenticator = stauth.Authenticate(
     preauthorized=config.get('preauthorized', {})
 )
 
+# =====================
+# Login
+# =====================
 name, authentication_status, username = authenticator.login("Connexion", "main")
 
 if authentication_status:
+
     authenticator.logout("Déconnexion", "sidebar")
     st.sidebar.success(f"Bienvenue {name} 👋")
 
