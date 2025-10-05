@@ -338,12 +338,11 @@ elif menu == "Tableaux & analyses":
         # ----------------------------
         # Trésorerie prévisionnelle
         # ----------------------------
-        elif sous_menu == "Trésorerie prévisionnelle":
-        st.header("💰 Trésorerie prévisionnelle")
+   elif sous_menu == "Trésorerie prévisionnelle":
+    st.header("💰 Trésorerie prévisionnelle")
 
-    # Date de départ
+    # Sélection de la date de départ
     date_debut = st.date_input("Date de départ de la trésorerie", pd.to_datetime("2025-04-01"))
-    date_debut_dt = pd.to_datetime(date_debut)
 
     # Assurer les bons types
     df_pivot["Compte"] = df_pivot["Compte"].astype(str)
@@ -351,7 +350,7 @@ elif menu == "Tableaux & analyses":
 
     # Comptes bancaires
     comptes_bancaires = df_pivot[df_pivot["Compte"].str.startswith("5")]
-    solde_depart_df = comptes_bancaires[comptes_bancaires["Date"] <= date_debut_dt]
+    solde_depart_df = comptes_bancaires[comptes_bancaires["Date"] <= pd.to_datetime(date_debut)]
     solde_depart_total = (solde_depart_df["Crédit"].sum() - solde_depart_df["Débit"].sum()) if not solde_depart_df.empty else 0.0
     st.info(f"Solde de départ calculé automatiquement : {solde_depart_total:,.2f} €")
 
@@ -362,9 +361,8 @@ elif menu == "Tableaux & analyses":
 
     if st.button("📊 Générer la prévision de trésorerie"):
         try:
-            # Flux mensuels : exclure comptes bancaires
+            # Flux mensuels sur comptes de résultat (hors comptes bancaires)
             df_flux = df_pivot[~df_pivot["Compte"].str.startswith("5")].copy()
-            df_flux = df_flux[df_flux["Date"] >= date_debut_dt]
             df_flux = df_flux.dropna(subset=["Date"])
             df_flux["Mois"] = df_flux["Date"].dt.to_period("M").astype(str)
 
@@ -373,11 +371,11 @@ elif menu == "Tableaux & analyses":
             flux_mensuel = flux_mensuel.sort_values("Mois")
 
             # Prévisions futures
-            dernier_mois = pd.Period(flux_mensuel["Mois"].max(), freq="M") if not flux_mensuel.empty else pd.Period(date_debut_dt, freq="M")
+            dernier_mois = pd.Period(flux_mensuel["Mois"].max(), freq="M") if not flux_mensuel.empty else pd.Period(date_debut, freq="M")
+            previsions = []
             ca_actuel = flux_mensuel["Crédit"].iloc[-1] if not flux_mensuel.empty else 0
             charges_actuelles = flux_mensuel["Débit"].iloc[-1] if not flux_mensuel.empty else 0
 
-            previsions = []
             for i in range(1, horizon + 1):
                 prochain_mois = (dernier_mois + i).strftime("%Y-%m")
                 ca_actuel *= (1 + croissance_ca / 100)
@@ -405,6 +403,7 @@ elif menu == "Tableaux & analyses":
             fig.update_layout(xaxis_title="Mois", yaxis_title="Trésorerie (€)")
             st.plotly_chart(fig, use_container_width=True)
 
+            # Détail mensuel
             st.subheader("📋 Détail mensuel")
             st.dataframe(df_tresorerie.style.format({
                 "Débit": "{:,.0f}",
