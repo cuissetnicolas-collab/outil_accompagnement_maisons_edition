@@ -246,7 +246,8 @@ elif menu == "Import données comptables":
         "Choisis ton mode d’extraction :",
         [
             "1️⃣ Pennylane Connect (fichier manuel)",
-            "2️⃣ Dossier partagé (Drive / OneDrive)"
+            "2️⃣ Dossier partagé (Drive / OneDrive)",
+            "3️⃣ API directe (mode expert)"
         ]
     )
 
@@ -265,7 +266,7 @@ elif menu == "Import données comptables":
 
     # --- Option 2 : Dossier partagé ---
     elif mode_import.startswith("2"):
-        st.info("📁 Mode dossier synchronisé : Streamlit accède automatiquement au fichier")
+        st.info("📁 Mode dossier synchronisé : Streamlit accède automatiquement aux fichiers")
         dossier_path = st.text_input("Chemin du dossier synchronisé :", placeholder="ex: C:/Users/EC/OneDrive/Pennylane_Connect")
         
         if st.button("Charger les fichiers du dossier"):
@@ -278,6 +279,24 @@ elif menu == "Import données comptables":
                 st.dataframe(df_all.head())
             else:
                 st.warning("Aucun fichier trouvé dans le dossier indiqué.")
+
+    # --- Option 3 : API directe ---
+    elif mode_import.startswith("3"):
+        st.info("🔗 Mode API : connexion directe à Pennylane, MyUnisoft, QuickBooks, etc.")
+
+        st.subheader("⚙️ Paramètres API")
+        api_url = st.text_input("URL de l'API", placeholder="https://api.pennylane.com/...")
+        api_key = st.text_input("Clé API", type="password")
+        api_secret = st.text_input("Secret API", type="password")
+        compte_id = st.text_input("ID du compte / société", placeholder="Ex: 123456")
+
+        if st.button("Tester la connexion API"):
+            if api_url and api_key and api_secret:
+                st.success("✅ Connexion test OK (simulation pour l'instant)")
+            else:
+                st.error("❌ Merci de renseigner tous les champs pour tester la connexion")
+
+        st.info("⚠️ Module API en développement – les données ne sont pas encore importées automatiquement.")
 # =====================
 # MODULE 3 : SOCLE PIVOT
 # =====================
