@@ -63,33 +63,52 @@ if menu == "Générateur d'écritures BLDD":
 # =====================
 elif menu == "Import données comptables":
     st.header("📂 Importation des données comptables")
-    fichier_comptables = st.file_uploader("📂 Sélectionnez votre fichier Excel", type=["xlsx"])
-
-    if fichier_comptables is not None:
+    fichier_comptables = st.file_uploader("📂 Sélectionne ton fichier Excel Pennylane Connect", type=["xlsx"])
+    
+    if fichier_comptables:
         df = pd.read_excel(fichier_comptables, header=0)
-        # Normalisation colonnes
-        df.columns = df.columns.str.strip().str.lower().str.replace(" ", "_").str.replace("\n","")
+        df.columns = df.columns.str.strip()
         st.session_state["df_comptables"] = df
         st.success(f"✅ Fichier chargé : {df.shape[0]} lignes")
         st.dataframe(df.head())
 
+        # --- Génération pivot analytique ---
         if st.button("🛠️ Générer le socle pivot analytique"):
             try:
-                df_pivot = pd.pivot_table(
-                    df,
-                    index=["compte", "famille_de_catégories", "catégories", "date"],
-                    values=["débit", "crédit"],
-                    aggfunc=np.sum,
-                    fill_value=0
-                ).reset_index()
-                # Renommer pour cohérence
-                df_pivot.rename(columns={
-                    "famille_de_catégories": "famille_analytique",
-                    "catégories": "code_analytique"
+                df_compta = st.session_state["df_comptables"].copy()
+                # Renommer colonnes pour standardiser
+                df_compta.rename(columns={
+                    "Numéro de compte": "Compte",
+                    "Débit": "Débit",
+                    "Crédit": "Crédit",
+                    "Date": "Date",
+                    "Familles de catégories": "Famille_Analytique",
+                    "Catégories": "Code_Analytique"
                 }, inplace=True)
-                st.session_state["df_pivot"] = df_pivot
+                
+                # Convertir la date
+                df_compta["Date"] = pd.to_datetime(df_compta["Date"], errors="coerce")
+                
+                # Générer le pivot analytique (en gardant la colonne Date)
+                pivot = df_compta.groupby(
+                    ["Date", "Compte", "Famille_Analytique", "Code_Analytique"], as_index=False
+                ).agg({"Débit": "sum", "Crédit": "sum"})
+                
+                st.session_state["df_pivot"] = pivot
                 st.success("✅ Socle pivot analytique généré !")
-                st.dataframe(df_pivot.head(20))
+                st.dataframe(pivot.head(20))
+                
+                # Export Excel
+                buffer = BytesIO()
+                with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+                    pivot.to_excel(writer, index=False, sheet_name="Socle_Pivot")
+                buffer.seek(0)
+                st.download_button(
+                    label="📥 Télécharger le socle pivot analytique",
+                    data=buffer,
+                    file_name="Socle_Pivot_Analytique.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
             except Exception as e:
                 st.error(f"❌ Erreur lors de la génération du pivot : {e}")
 
