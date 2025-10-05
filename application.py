@@ -269,13 +269,13 @@ elif menu == "Socle pivot analytique":
                 st.error(f"❌ Erreur lors de la génération du pivot : {e}")
 
 # =====================
-# MODULE 4 : TABLEAUX & ANALYSES (avec trésorerie)
+# MODULE 4 : TABLEAUX & ANALYSES
 # =====================
 elif menu == "Tableaux & analyses":
     st.header("📊 Tableaux & analyses")
 
     if "df_pivot" not in st.session_state:
-        st.warning("⚠️ Générer d'abord le socle pivot depuis le module Import données comptables.")
+        st.warning("⚠️ Générer d'abord le socle pivot depuis le module Socle pivot analytique.")
     else:
         df_pivot = st.session_state["df_pivot"]
 
@@ -291,13 +291,17 @@ elif menu == "Tableaux & analyses":
         # ----------------------------
         if sous_menu == "Dashboard analytique":
             st.subheader("📈 Top 10 ISBN par résultat net")
+
             df_pivot["Résultat"] = df_pivot["Crédit"] - df_pivot["Débit"]
             top_isbn = df_pivot.groupby("Code_Analytique", as_index=False)["Résultat"].sum()
             top_isbn = top_isbn.sort_values(by="Résultat", ascending=False).head(10)
+
             if top_isbn.empty:
                 st.warning("⚠️ Aucun résultat disponible pour générer le dashboard.")
             else:
                 st.dataframe(top_isbn)
+
+                import plotly.express as px
                 fig = px.bar(
                     top_isbn,
                     x="Code_Analytique",
@@ -312,13 +316,16 @@ elif menu == "Tableaux & analyses":
         # ----------------------------
         elif sous_menu == "Mini compte de résultat par ISBN":
             st.subheader("💼 Mini compte de résultat par ISBN")
+
             df_cr = df_pivot.groupby("Code_Analytique", as_index=False).agg({
                 "Débit": "sum",
                 "Crédit": "sum"
             })
             df_cr["Résultat"] = df_cr["Crédit"] - df_cr["Débit"]
+
             st.dataframe(df_cr)
 
+            from io import BytesIO
             buffer = BytesIO()
             with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
                 df_cr.to_excel(writer, index=False, sheet_name="Mini_CR_ISBN")
@@ -332,79 +339,80 @@ elif menu == "Tableaux & analyses":
 
         # ----------------------------
         # Trésorerie prévisionnelle
-# ----------------------------
-elif sous_menu == "Trésorerie prévisionnelle":
-    st.header("💰 Trésorerie prévisionnelle")
+        # ----------------------------
+        elif sous_menu == "Trésorerie prévisionnelle":
+            st.header("💰 Trésorerie prévisionnelle")
 
-    # Sélection de la date de départ
-    date_debut = st.date_input("Date de départ de la trésorerie", pd.to_datetime("2025-01-01"))
+            # Date de départ
+            date_debut = st.date_input("Date de départ de la trésorerie", pd.to_datetime("2025-04-01"))
 
-    # Préparation du socle pivot pour la trésorerie
-    df_pivot["Date"] = pd.to_datetime(df_pivot["Date"], errors="coerce")
-    df_pivot["Compte"] = df_pivot["Compte"].fillna("0").astype(str)  # ⚡ Correction ici
+            # Assurer les bons types
+            df_pivot["Compte"] = df_pivot["Compte"].astype(str)
+            df_pivot["Date"] = pd.to_datetime(df_pivot["Date"], errors="coerce")
 
-    # Comptes bancaires
-    comptes_bancaires = df_pivot[df_pivot["Compte"].str.startswith("5")]
-    solde_depart_df = comptes_bancaires[comptes_bancaires["Date"] <= pd.to_datetime(date_debut)]
-    solde_depart_total = (solde_depart_df["Crédit"].sum() - solde_depart_df["Débit"].sum()) if not solde_depart_df.empty else 0.0
-    st.info(f"Solde de départ calculé automatiquement : {solde_depart_total:,.2f} €")
+            # Comptes bancaires
+            comptes_bancaires = df_pivot[df_pivot["Compte"].str.startswith("5")]
+            solde_depart_df = comptes_bancaires[comptes_bancaires["Date"] <= pd.to_datetime(date_debut)]
+            solde_depart_total = (solde_depart_df["Crédit"].sum() - solde_depart_df["Débit"].sum()) if not solde_depart_df.empty else 0.0
+            st.info(f"Solde de départ calculé automatiquement : {solde_depart_total:,.2f} €")
 
-    # Paramètres prévisionnels
-    horizon = st.slider("Horizon de projection (en mois)", 3, 24, 12)
-    croissance_ca = st.number_input("Croissance mensuelle du CA (%)", value=2.0)
-    evolution_charges = st.number_input("Évolution mensuelle des charges (%)", value=1.0)
+            # Paramètres prévisionnels
+            horizon = st.slider("Horizon de projection (en mois)", 3, 24, 12)
+            croissance_ca = st.number_input("Croissance mensuelle du CA (%)", value=2.0)
+            evolution_charges = st.number_input("Évolution mensuelle des charges (%)", value=1.0)
 
-    if st.button("📊 Générer la prévision de trésorerie"):
-        try:
-            # Flux mensuels sur comptes de résultat (hors comptes bancaires)
-            df_flux = df_pivot[~df_pivot["Compte"].str.startswith("5")]
-            df_flux = df_flux.dropna(subset=["Date"])  # ⚡ Supprimer les lignes sans date
-            df_flux["Mois"] = df_flux["Date"].dt.to_period("M").astype(str)
-            flux_mensuel = df_flux.groupby("Mois").agg({"Débit": "sum", "Crédit": "sum"}).reset_index()
-            flux_mensuel["Solde_mensuel"] = flux_mensuel["Crédit"] - flux_mensuel["Débit"]
-            flux_mensuel = flux_mensuel.sort_values("Mois")
+            if st.button("📊 Générer la prévision de trésorerie"):
+                try:
+                    # Flux mensuels sur comptes de résultat
+                    df_flux = df_pivot[~df_pivot["Compte"].str.startswith("5")].copy()
+                    df_flux = df_flux.dropna(subset=["Date"])
+                    df_flux["Mois"] = df_flux["Date"].dt.to_period("M").astype(str)
 
-            # Prévisions futures
-            dernier_mois = pd.Period(flux_mensuel["Mois"].max(), freq="M") if not flux_mensuel.empty else pd.Period(pd.to_datetime(date_debut), freq="M")
-            previsions = []
-            ca_actuel = flux_mensuel["Crédit"].iloc[-1] if not flux_mensuel.empty else 0.0
-            charges_actuelles = flux_mensuel["Débit"].iloc[-1] if not flux_mensuel.empty else 0.0
+                    flux_mensuel = df_flux.groupby("Mois").agg({"Débit": "sum", "Crédit": "sum"}).reset_index()
+                    flux_mensuel["Solde_mensuel"] = flux_mensuel["Crédit"] - flux_mensuel["Débit"]
+                    flux_mensuel = flux_mensuel.sort_values("Mois")
 
-            for i in range(1, horizon + 1):
-                prochain_mois = (dernier_mois + i).strftime("%Y-%m")
-                ca_actuel *= (1 + croissance_ca / 100)
-                charges_actuelles *= (1 + evolution_charges / 100)
-                solde_prevu = ca_actuel - charges_actuelles
-                previsions.append({
-                    "Mois": prochain_mois,
-                    "Débit": charges_actuelles,
-                    "Crédit": ca_actuel,
-                    "Solde_mensuel": solde_prevu
-                })
+                    # Prévisions futures
+                    dernier_mois = pd.Period(flux_mensuel["Mois"].max(), freq="M") if not flux_mensuel.empty else pd.Period(date_debut, freq="M")
+                    previsions = []
+                    ca_actuel = flux_mensuel["Crédit"].iloc[-1] if not flux_mensuel.empty else 0
+                    charges_actuelles = flux_mensuel["Débit"].iloc[-1] if not flux_mensuel.empty else 0
 
-            df_prev = pd.DataFrame(previsions)
-            df_tresorerie = pd.concat([flux_mensuel, df_prev], ignore_index=True)
-            df_tresorerie["Trésorerie_cumulée"] = solde_depart_total + df_tresorerie["Solde_mensuel"].cumsum()
+                    for i in range(1, horizon + 1):
+                        prochain_mois = (dernier_mois + i).strftime("%Y-%m")
+                        ca_actuel *= (1 + croissance_ca / 100)
+                        charges_actuelles *= (1 + evolution_charges / 100)
+                        solde_prevu = ca_actuel - charges_actuelles
+                        previsions.append({
+                            "Mois": prochain_mois,
+                            "Débit": charges_actuelles,
+                            "Crédit": ca_actuel,
+                            "Solde_mensuel": solde_prevu
+                        })
 
-            # Graphique
-            fig = px.line(
-                df_tresorerie,
-                x="Mois",
-                y="Trésorerie_cumulée",
-                title="📈 Évolution prévisionnelle de la trésorerie",
-                markers=True
-            )
-            fig.update_layout(xaxis_title="Mois", yaxis_title="Trésorerie (€)")
-            st.plotly_chart(fig, use_container_width=True)
+                    df_prev = pd.DataFrame(previsions)
+                    df_tresorerie = pd.concat([flux_mensuel, df_prev], ignore_index=True)
+                    df_tresorerie["Trésorerie_cumulée"] = solde_depart_total + df_tresorerie["Solde_mensuel"].cumsum()
 
-            # Tableau détail mensuel
-            st.subheader("📋 Détail mensuel")
-            st.dataframe(df_tresorerie.style.format({
-                "Débit": "{:,.0f}",
-                "Crédit": "{:,.0f}",
-                "Solde_mensuel": "{:,.0f}",
-                "Trésorerie_cumulée": "{:,.0f}"
-            }))
+                    # Graphique
+                    import plotly.express as px
+                    fig = px.line(
+                        df_tresorerie,
+                        x="Mois",
+                        y="Trésorerie_cumulée",
+                        title="📈 Évolution prévisionnelle de la trésorerie",
+                        markers=True
+                    )
+                    fig.update_layout(xaxis_title="Mois", yaxis_title="Trésorerie (€)")
+                    st.plotly_chart(fig, use_container_width=True)
 
-        except Exception as e:
-            st.error(f"❌ Erreur lors de la simulation : {e}")
+                    st.subheader("📋 Détail mensuel")
+                    st.dataframe(df_tresorerie.style.format({
+                        "Débit": "{:,.0f}",
+                        "Crédit": "{:,.0f}",
+                        "Solde_mensuel": "{:,.0f}",
+                        "Trésorerie_cumulée": "{:,.0f}"
+                    }))
+
+                except Exception as e:
+                    st.error(f"❌ Erreur lors de la simulation : {e}")
