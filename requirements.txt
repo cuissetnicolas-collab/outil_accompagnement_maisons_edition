@@ -3,3 +3,4 @@ streamlit-authenticator==0.4.2
 pandas
 numpy
 openpyxl
+plotly>=5.0.0
