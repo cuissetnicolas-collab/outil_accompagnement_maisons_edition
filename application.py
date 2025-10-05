@@ -240,45 +240,35 @@ if menu == "Générateur d'écritures BLDD":
 # MODULE 2 : IMPORT COMPTABLE
 # =====================
 elif menu == "Import données comptables":
-    st.header("📂 Importation des données comptables - Pennylane Connect")
+    st.header("📂 Importation des données comptables")
 
-    fichiers = st.file_uploader(
-        "📥 Importer un ou plusieurs fichiers Excel Pennylane Connect",
-        type=["xlsx"],
-        accept_multiple_files=True
+    mode_import = st.selectbox(
+        "Choisis ton mode d’extraction :",
+        [
+            "1️⃣ API directe (mode expert)",
+            "2️⃣ Synchronisation automatique (dossier partagé)"
+        ]
     )
 
-    if fichiers:
-        dfs = []
-        for f in fichiers:
-            try:
-                df = pd.read_excel(f, header=0)
-                # Normaliser les colonnes pour simplifier la suite
-                df.columns = df.columns.str.strip().str.replace(" ", "_")
-                dfs.append(df)
-            except Exception as e:
-                st.error(f"❌ Impossible de lire le fichier {f.name} : {e}")
+    if mode_import.startswith("1"):
+        st.info("🔗 Mode API : connexion directe à Pennylane, MyUnisoft, QuickBooks, etc.")
+        st.warning("⚠️ Module API en développement – nécessite configuration des identifiants et clés API.")
+        # Ici tu pourrais intégrer la connexion API si tu veux automatiser l'import
 
-        if dfs:
-            df_all = pd.concat(dfs, ignore_index=True)
-            st.success(f"✅ {len(fichiers)} fichier(s) importé(s) avec succès !")
-            
-            # Affichage d'un aperçu
-            st.subheader("👀 Aperçu des données importées")
-            st.dataframe(df_all.head(20))
-
-            # Option d'export consolidé
-            buffer = BytesIO()
-            with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
-                df_all.to_excel(writer, index=False, sheet_name="Compta_Pennylane")
-            buffer.seek(0)
-
-            st.download_button(
-                label="📥 Télécharger les données consolidées",
-                data=buffer,
-                file_name="Import_Pennylane_Connect.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )
+    elif mode_import.startswith("2"):
+        st.info("📁 Mode dossier synchronisé : l’application surveille un dossier partagé (OneDrive, Drive...)")
+        dossier_path = st.text_input("Chemin du dossier synchronisé :", placeholder="ex: C:/Users/EC/OneDrive/Pennylane_Connect")
+        
+        if st.button("Charger les fichiers du dossier"):
+            import glob, os
+            fichiers = glob.glob(os.path.join(dossier_path, "*.xlsx"))
+            if fichiers:
+                dfs = [pd.read_excel(f) for f in fichiers]
+                df_all = pd.concat(dfs, ignore_index=True)
+                st.success(f"{len(fichiers)} fichiers chargés automatiquement depuis {dossier_path}")
+                st.dataframe(df_all.head())
+            else:
+                st.warning("Aucun fichier trouvé dans le dossier indiqué.")
 # =====================
 # MODULE 3 : SOCLE PIVOT
 # =====================
