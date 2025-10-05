@@ -87,15 +87,20 @@ if menu == "Générateur d'écritures BLDD":
     fichier_entree = st.file_uploader("📂 Importer le fichier Excel BLDD", type=None)
 
     if fichier_entree is not None:
-        if not fichier_entree.name.endswith((".xls", ".xlsx")):
-            st.error("❌ Format de fichier non supporté. Merci de fournir un .xls ou .xlsx")
-            st.stop()
-
-        # Lecture avec pandas
-        try:
-            df = pd.read_excel(fichier_entree, header=9, dtype={"ISBN": str})
-        except Exception as e:
-            st.error(f"❌ Impossible de lire le fichier Excel : {e}")
+        if fichier_entree.name.endswith(".xls"):
+            try:
+                df = pd.read_excel(fichier_entree, header=9, dtype={"ISBN": str}, engine="xlrd")
+            except Exception as e:
+                st.error(f"❌ Impossible de lire le fichier .xls : {e}")
+                st.stop()
+        elif fichier_entree.name.endswith(".xlsx"):
+            try:
+                df = pd.read_excel(fichier_entree, header=9, dtype={"ISBN": str}, engine="openpyxl")
+            except Exception as e:
+                st.error(f"❌ Impossible de lire le fichier .xlsx : {e}")
+                st.stop()
+        else:
+            st.error("❌ Format non supporté, merci de fournir un .xls ou .xlsx")
             st.stop()
 
         # --- Nettoyage des données ---
@@ -223,7 +228,6 @@ if menu == "Générateur d'écritures BLDD":
 
         st.subheader("👀 Aperçu des écritures générées")
         st.dataframe(df_ecr.head(10))
-
 # =====================
 # MODULE 2 : IMPORT COMPTABLE
 # =====================
