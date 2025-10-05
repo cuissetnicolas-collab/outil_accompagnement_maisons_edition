@@ -202,7 +202,7 @@ if menu == "Générateur d'écritures BLDD":
         st.dataframe(df_ecr)
 
 # =====================
-# MODULE 2 & 3 : IMPORT DONNÉES COMPTABLES + SOCLE PIVOT
+# MODULE 2 & 3 : IMPORT DONNÉES COMPTABLES 
 # =====================
 elif menu == "Import données comptables":
     st.header("📂 Importation des données comptables")
@@ -236,7 +236,7 @@ elif menu == "Import données comptables":
         except Exception as e:
             st.error(f"❌ Erreur lors de l'importation : {e}")
 
-MODULE PIVOT
+# MODULE PIVOT
 elif menu == "Socle pivot analytique":
     st.header("🛠️ Génération du socle pivot analytique")
 
