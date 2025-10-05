@@ -55,10 +55,10 @@ menu = st.sidebar.radio(
 if menu == "Générateur d'écritures BLDD":
     st.header("📘 Générateur d'écritures analytiques – BLDD")
 
-    # Champs communs
+    # --- Paramètres de base ---
     date_ecriture = st.date_input("📅 Date d'écriture")
     journal = st.text_input("📒 Journal", value="VT")
-    libelle_base = st.text_input("📝 Libellé", value="VENTES BLDD")
+    libelle_base = st.text_input("📝 Libellé de base", value="VENTES BLDD")
 
     compte_ca = st.text_input("💰 Compte CA", value="70110000")
     compte_com_dist = st.text_input("💰 Compte commissions distribution", value="62280000")
@@ -70,106 +70,138 @@ if menu == "Générateur d'écritures BLDD":
     com_distribution_total = st.number_input("Montant total commissions distribution", value=1000.00, format="%.2f")
     com_diffusion_total = st.number_input("Montant total commissions diffusion", value=500.00, format="%.2f")
 
-    # Upload fichier BLDD
+    # --- NOUVEAU : sélection de la famille analytique ---
+    st.markdown("---")
+    st.subheader("🧭 Famille analytique")
+    famille_analytique = st.text_input(
+        "Nom de la famille analytique (obligatoire pour import Pennylane)",
+        value="ISBN"  # valeur par défaut
+    )
+    st.caption("Exemples : ISBN / Collection / Client / Projet / Auteur")
+
+    if not famille_analytique:
+        st.warning("⚠️ Merci de renseigner la famille analytique avant de générer les écritures.")
+
+    # --- Import fichier BLDD ---
+    st.markdown("---")
     fichier_entree = st.file_uploader("📂 Importer le fichier Excel BLDD", type=["xlsx"])
 
     if fichier_entree is not None:
         df = pd.read_excel(fichier_entree, header=9, dtype={"ISBN": str})
         df.columns = df.columns.str.strip()
         df = df.dropna(subset=["ISBN"]).copy()
-        df["ISBN"] = df["ISBN"].astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
-        df["ISBN"] = df["ISBN"].str.replace('-', '', regex=False).str.replace(' ', '', regex=False)
+        df["ISBN"] = (
+            df["ISBN"].astype(str)
+            .str.strip()
+            .str.replace(r"\.0$", "", regex=True)
+            .str.replace("-", "")
+            .str.replace(" ", "")
+        )
 
         for c in ["Vente", "Net", "Facture"]:
             df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0).round(2)
 
-        # ----- Calcul commissions -----
+        # --- Calcul commissions ---
         # Distribution
         raw_dist = df["Vente"] * taux_dist
         sum_raw_dist = raw_dist.sum()
-        scaled_dist = raw_dist * (com_distribution_total / sum_raw_dist)
-        cents_floor = np.floor(scaled_dist * 100).astype(int)
-        remainders = (scaled_dist * 100) - cents_floor
-        target_cents = int(round(com_distribution_total * 100))
-        diff = target_cents - cents_floor.sum()
-        idx_sorted = np.argsort(-remainders.values)
-        adjust = np.zeros(len(df), dtype=int)
-        if diff > 0:
-            adjust[idx_sorted[:diff]] = 1
-        elif diff < 0:
-            adjust[idx_sorted[len(df)+diff:]] = -1
-        df["Commission_distribution"] = (cents_floor + adjust) / 100.0
+        df["Commission_distribution"] = (
+            raw_dist * (com_distribution_total / sum_raw_dist) if sum_raw_dist else 0
+        )
 
         # Diffusion
-        df["Commission_diffusion"] = df["Net"] * (com_diffusion_total / df["Net"].sum())
-        cents_floor = np.floor(df["Commission_diffusion"] * 100).astype(int)
-        remainders = (df["Commission_diffusion"] * 100) - cents_floor
-        target_cents = int(round(com_diffusion_total * 100))
-        diff = target_cents - cents_floor.sum()
-        idx_sorted = np.argsort(-remainders.values)
-        adjust = np.zeros(len(df), dtype=int)
-        if diff > 0:
-            adjust[idx_sorted[:diff]] = 1
-        elif diff < 0:
-            adjust[idx_sorted[len(df)+diff:]] = -1
-        df["Commission_diffusion"] = (cents_floor + adjust) / 100.0
+        raw_diff = df["Net"] * taux_diff
+        sum_raw_diff = raw_diff.sum()
+        df["Commission_diffusion"] = (
+            raw_diff * (com_diffusion_total / sum_raw_diff) if sum_raw_diff else 0
+        )
 
-        # ----- Construction écritures -----
+        # --- Construction écritures ---
         ecritures = []
         total_facture_global = df["Facture"].sum().round(2)
 
         # CA global
         ecritures.append({
-            "Date": date_ecriture.strftime("%d/%m/%Y"), "Journal": journal, "Compte": compte_ca,
-            "Libelle": f"{libelle_base} - CA global", "ISBN": "",
-            "Débit": total_facture_global, "Crédit": 0.0
+            "Date": date_ecriture.strftime("%d/%m/%Y"),
+            "Journal": journal,
+            "Compte": compte_ca,
+            "Libelle": f"{libelle_base} - CA global",
+            "Famille_Analytique": famille_analytique,
+            "Code_Analytique": "",  # laissé vide pour global
+            "Débit": 0.0,
+            "Crédit": total_facture_global
         })
 
         # CA par ISBN
         for _, r in df.iterrows():
             ecritures.append({
-                "Date": date_ecriture.strftime("%d/%m/%Y"), "Journal": journal, "Compte": compte_ca,
-                "Libelle": f"{libelle_base} - CA ISBN", "ISBN": r["ISBN"],
-                "Débit": 0.0, "Crédit": round(float(r["Facture"]), 2)
+                "Date": date_ecriture.strftime("%d/%m/%Y"),
+                "Journal": journal,
+                "Compte": compte_ca,
+                "Libelle": f"{libelle_base} - CA {r['ISBN']}",
+                "Famille_Analytique": famille_analytique,
+                "Code_Analytique": r["ISBN"],  # clé analytique individuelle
+                "Débit": 0.0,
+                "Crédit": round(float(r["Facture"]), 2)
             })
 
         # Commissions distribution
         total_dist = df["Commission_distribution"].sum().round(2)
         ecritures.append({
-            "Date": date_ecriture.strftime("%d/%m/%Y"), "Journal": journal, "Compte": compte_com_dist,
-            "Libelle": f"{libelle_base} - Com. distribution global", "ISBN": "",
-            "Débit": 0.0, "Crédit": total_dist
+            "Date": date_ecriture.strftime("%d/%m/%Y"),
+            "Journal": journal,
+            "Compte": compte_com_dist,
+            "Libelle": f"{libelle_base} - Com. distribution global",
+            "Famille_Analytique": famille_analytique,
+            "Code_Analytique": "",
+            "Débit": total_dist,
+            "Crédit": 0.0
         })
         for _, r in df.iterrows():
             ecritures.append({
-                "Date": date_ecriture.strftime("%d/%m/%Y"), "Journal": journal, "Compte": compte_com_dist,
-                "Libelle": f"{libelle_base} - Com. distribution ISBN", "ISBN": r["ISBN"],
-                "Débit": round(float(r["Commission_distribution"]), 2), "Crédit": 0.0
+                "Date": date_ecriture.strftime("%d/%m/%Y"),
+                "Journal": journal,
+                "Compte": compte_com_dist,
+                "Libelle": f"{libelle_base} - Com. distribution {r['ISBN']}",
+                "Famille_Analytique": famille_analytique,
+                "Code_Analytique": r["ISBN"],
+                "Débit": round(float(r["Commission_distribution"]), 2),
+                "Crédit": 0.0
             })
 
         # Commissions diffusion
         total_diff = df["Commission_diffusion"].sum().round(2)
         ecritures.append({
-            "Date": date_ecriture.strftime("%d/%m/%Y"), "Journal": journal, "Compte": compte_com_diff,
-            "Libelle": f"{libelle_base} - Com. diffusion global", "ISBN": "",
-            "Débit": 0.0, "Crédit": total_diff
+            "Date": date_ecriture.strftime("%d/%m/%Y"),
+            "Journal": journal,
+            "Compte": compte_com_diff,
+            "Libelle": f"{libelle_base} - Com. diffusion global",
+            "Famille_Analytique": famille_analytique,
+            "Code_Analytique": "",
+            "Débit": total_diff,
+            "Crédit": 0.0
         })
         for _, r in df.iterrows():
             ecritures.append({
-                "Date": date_ecriture.strftime("%d/%m/%Y"), "Journal": journal, "Compte": compte_com_diff,
-                "Libelle": f"{libelle_base} - Com. diffusion ISBN", "ISBN": r["ISBN"],
-                "Débit": round(float(r["Commission_diffusion"]), 2), "Crédit": 0.0
+                "Date": date_ecriture.strftime("%d/%m/%Y"),
+                "Journal": journal,
+                "Compte": compte_com_diff,
+                "Libelle": f"{libelle_base} - Com. diffusion {r['ISBN']}",
+                "Famille_Analytique": famille_analytique,
+                "Code_Analytique": r["ISBN"],
+                "Débit": round(float(r["Commission_diffusion"]), 2),
+                "Crédit": 0.0
             })
 
+        # --- Export final ---
         df_ecr = pd.DataFrame(ecritures)
-
-        # Vérification équilibre
         total_debit = round(df_ecr["Débit"].sum(), 2)
         total_credit = round(df_ecr["Crédit"].sum(), 2)
+
         if total_debit != total_credit:
             st.error(f"⚠️ Écriture déséquilibrée : Débit={total_debit}, Crédit={total_credit}")
         else:
-            st.success("✅ Écritures équilibrées !")
+            st.success("✅ Écritures équilibrées et prêtes à l’import Pennylane !")
 
         # Export Excel
         buffer = BytesIO()
@@ -178,14 +210,14 @@ if menu == "Générateur d'écritures BLDD":
         buffer.seek(0)
 
         st.download_button(
-            label="📥 Télécharger les écritures (Excel)",
+            label="📥 Télécharger les écritures analytiques (Excel)",
             data=buffer,
-            file_name="Ecritures_Pennylane.xlsx",
+            file_name="Ecritures_Pennylane_Analytique.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
         )
 
         st.subheader("👀 Aperçu des écritures générées")
-        st.dataframe(df_ecr)
+        st.dataframe(df_ecr.head(10))
 
 # =====================
 # MODULE 2 : IMPORT COMPTABLE
