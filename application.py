@@ -302,7 +302,44 @@ elif menu == "Import données comptables":
 # =====================
 elif menu == "Socle pivot analytique":
     st.header("🏗️ Construction du socle pivot analytique")
-    st.info("Ici on fusionnera BLDD + Comptabilité + Données internes pour créer une base unique exploitable.")
+
+    if "df_comptables" not in st.session_state or st.session_state["df_comptables"] is None:
+        st.warning("⚠️ Importez d'abord les données comptables dans le module précédent.")
+    else:
+        df_all = st.session_state["df_comptables"]
+        st.success(f"✅ {df_all.shape[0]} lignes disponibles pour construire le socle pivot")
+
+        # Standardiser les colonnes
+        for col in ["Date", "Compte", "Libelle", "Débit", "Crédit", "Famille_Analytique", "Code_Analytique"]:
+            if col not in df_all.columns:
+                df_all[col] = ""
+
+        # Ajouter colonnes auxiliaires
+        df_all["Exercice"] = pd.to_datetime(df_all["Date"], errors="coerce").dt.year
+        df_all["Mois"] = pd.to_datetime(df_all["Date"], errors="coerce").dt.month
+
+        # Pivot analytique
+        pivot = df_all.pivot_table(
+            index=["Famille_Analytique", "Code_Analytique", "Exercice", "Mois"],
+            values=["Débit", "Crédit"],
+            aggfunc="sum"
+        ).reset_index()
+
+        st.subheader("👀 Aperçu du socle analytique")
+        st.dataframe(pivot.head(20))
+
+        # Export Excel
+        buffer = BytesIO()
+        with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+            pivot.to_excel(writer, index=False, sheet_name="Socle_Analytique")
+        buffer.seek(0)
+
+        st.download_button(
+            label="📥 Télécharger le socle analytique (Excel)",
+            data=buffer,
+            file_name="Socle_Analytique.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
 
 # =====================
 # MODULE 4 : TABLEAUX & ANALYSES
