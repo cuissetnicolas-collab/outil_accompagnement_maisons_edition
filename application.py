@@ -343,77 +343,98 @@ elif menu == "Socle pivot analytique":
 # =====================
 # MODULE 4 : TABLEAUX & ANALYSES
 # =====================
-elif menu == "Tableaux & analyses":
-    st.header("📊 Tableaux & analyses")
+if menu == "Tableaux & analyses":
+    st.header("📊 Dashboard analytique")
 
     if "df_pivot" not in st.session_state:
         st.warning("⚠️ Générer d'abord le socle pivot depuis le module Import données comptables.")
     else:
-        pivot = st.session_state["df_pivot"]
+        df_pivot = st.session_state["df_pivot"].copy()
 
+        # --- Sélection du type d'analyse ---
         sous_menu = st.selectbox("Choix de l'analyse", [
             "Dashboard analytique",
             "Mini compte de résultat par ISBN"
         ])
 
-        # --------------------
+        # =====================
         # DASHBOARD ANALYTIQUE
-        # --------------------
+        # =====================
         if sous_menu == "Dashboard analytique":
-            st.subheader("📈 Dashboard analytique global")
+            st.subheader("🏆 Top ISBN par résultat net")
 
-            # Totaux généraux
-            total_debit = pivot["Débit"].sum()
-            total_credit = pivot["Crédit"].sum()
-            st.metric("Total Débit", f"{total_debit:,.2f}")
-            st.metric("Total Crédit", f"{total_credit:,.2f}")
+            # Définir les comptes produits et charges
+            comptes_produits = df_pivot['Compte'].astype(str).str.startswith('7')
+            comptes_charges = df_pivot['Compte'].astype(str).str.startswith('6')
 
-            # Totaux par compte
-            st.subheader("💰 Totaux par compte")
-            pivot_compte = pivot.groupby("Compte", as_index=False).agg({"Débit":"sum","Crédit":"sum"})
-            st.dataframe(pivot_compte)
+            # Agréger résultats par ISBN
+            df_resultat = df_pivot.groupby("Code_Analytique").agg({
+                "Débit": "sum",
+                "Crédit": "sum"
+            }).reset_index()
+            df_resultat['Produit'] = df_pivot[comptes_produits].groupby("Code_Analytique")["Crédit"].sum()
+            df_resultat['Charge'] = df_pivot[comptes_charges].groupby("Code_Analytique")["Débit"].sum()
+            df_resultat = df_resultat.fillna(0)
+            df_resultat['Résultat_net'] = df_resultat['Produit'] - df_resultat['Charge']
+            df_resultat['Marge_%'] = (df_resultat['Résultat_net'] / df_resultat['Produit'].replace(0,1) * 100).round(2)
 
-            # Totaux par famille analytique
-            st.subheader("🧩 Totaux par Famille Analytique")
-            pivot_famille = pivot.groupby("Famille_Analytique", as_index=False).agg({"Débit":"sum","Crédit":"sum"})
-            st.dataframe(pivot_famille)
+            # Top 10 ISBN par résultat
+            top10 = df_resultat.sort_values("Résultat_net", ascending=False).head(10)
 
-        # ---------------------------------
+            st.dataframe(top10[["Code_Analytique", "Produit", "Charge", "Résultat_net", "Marge_%"]])
+
+            # Graphique résultat net
+            fig = px.bar(
+                top10,
+                x="Résultat_net",
+                y="Code_Analytique",
+                orientation='h',
+                text="Résultat_net",
+                title="Top 10 ISBN par résultat net",
+                labels={"Code_Analytique":"ISBN", "Résultat_net":"Résultat net (€)"}
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+            # Graphique produits vs charges
+            fig2 = px.bar(
+                top10,
+                x="Code_Analytique",
+                y=["Produit","Charge"],
+                title="Produits vs Charges des 10 ISBN les plus rentables",
+                labels={"value":"Montant (€)", "Code_Analytique":"ISBN"},
+                barmode='group'
+            )
+            st.plotly_chart(fig2, use_container_width=True)
+
+        # =====================
         # MINI COMPTE DE RÉSULTAT PAR ISBN
-        # ---------------------------------
+        # =====================
         elif sous_menu == "Mini compte de résultat par ISBN":
-            st.subheader("📚 Mini compte de résultat par ISBN")
+            st.subheader("📄 Mini compte de résultat par ISBN")
 
-            # Vérification colonnes nécessaires
-            required_cols = ["Code_Analytique", "Compte", "Débit", "Crédit"]
-            if not all(col in pivot.columns for col in required_cols):
-                st.error(f"❌ Colonnes manquantes pour le mini compte de résultat : {required_cols}")
-            else:
-                # On filtre sur les comptes de charges et produits pour un mini CR
-                # Exemple : comptes commençant par 7 = produits, comptes 6 = charges
-                pivot_cr = pivot.copy()
-                pivot_cr["Produit"] = pivot_cr.apply(lambda x: x["Crédit"] if str(x["Compte"]).startswith("7") else 0, axis=1)
-                pivot_cr["Charge"] = pivot_cr.apply(lambda x: x["Débit"] if str(x["Compte"]).startswith("6") else 0, axis=1)
+            isbn_select = st.selectbox("Sélectionnez l'ISBN :", df_pivot["Code_Analytique"].unique())
+            
+            df_isbn = df_pivot[df_pivot["Code_Analytique"] == isbn_select]
 
-                mini_cr = pivot_cr.groupby("Code_Analytique", as_index=False).agg({
-                    "Produit": "sum",
-                    "Charge": "sum"
-                })
-                mini_cr["Résultat"] = mini_cr["Produit"] - mini_cr["Charge"]
+            df_isbn_cr = df_isbn.groupby("Compte").agg({
+                "Débit":"sum",
+                "Crédit":"sum"
+            }).reset_index()
+            df_isbn_cr['Résultat_net'] = df_isbn_cr['Crédit'] - df_isbn_cr['Débit']
 
-                st.dataframe(mini_cr)
+            st.dataframe(df_isbn_cr)
 
-                # Export Excel
-                from io import BytesIO
-                buffer_cr = BytesIO()
-                with pd.ExcelWriter(buffer_cr, engine="openpyxl") as writer:
-                    mini_cr.to_excel(writer, index=False, sheet_name="Mini_CR_ISBN")
-                buffer_cr.seek(0)
+            # Export Excel
+            from io import BytesIO
+            buffer = BytesIO()
+            with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+                df_isbn_cr.to_excel(writer, index=False, sheet_name=f"CR_{isbn_select}")
+            buffer.seek(0)
 
-                st.download_button(
-                    label="📥 Télécharger le mini compte de résultat par ISBN",
-                    data=buffer_cr,
-                    file_name="Mini_CR_ISBN.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                )
+            st.download_button(
+                label=f"📥 Télécharger le mini compte de résultat pour {isbn_select}",
+                data=buffer,
+                file_name=f"Mini_CR_{isbn_select}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
 
