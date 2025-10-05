@@ -339,7 +339,7 @@ elif menu == "Tableaux & analyses":
         # Trésorerie prévisionnelle
         # ----------------------------
         elif sous_menu == "Trésorerie prévisionnelle":
-    st.header("💰 Trésorerie prévisionnelle")
+        st.header("💰 Trésorerie prévisionnelle")
 
     # Date de départ
     date_debut = st.date_input("Date de départ de la trésorerie", pd.to_datetime("2025-04-01"))
