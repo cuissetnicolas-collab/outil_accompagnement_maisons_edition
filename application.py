@@ -245,32 +245,27 @@ elif menu == "Import données comptables":
     mode_import = st.selectbox(
         "Choisis ton mode d’extraction :",
         [
-            "1️⃣ API directe (mode expert)",
-            "2️⃣ Synchronisation automatique (dossier partagé)"
+            "1️⃣ Pennylane Connect (fichier manuel)",
+            "2️⃣ Dossier partagé (Drive / OneDrive)"
         ]
     )
 
-    # --- Option 1 : API directe ---
+    # --- Option 1 : Pennylane Connect ---
     if mode_import.startswith("1"):
-        st.info("🔗 Mode API : connexion directe à Pennylane, MyUnisoft, QuickBooks, etc.")
-
-        st.subheader("⚙️ Paramètres API")
-        api_url = st.text_input("URL de l'API", placeholder="https://api.pennylane.com/...")
-        api_key = st.text_input("Clé API", type="password")
-        api_secret = st.text_input("Secret API", type="password")
-        compte_id = st.text_input("ID du compte / société", placeholder="Ex: 123456")
-
-        if st.button("Tester la connexion API"):
-            if api_url and api_key and api_secret:
-                st.success("✅ Connexion test OK (simulation pour l'instant)")
-            else:
-                st.error("❌ Merci de renseigner tous les champs pour tester la connexion")
-
-        st.info("⚠️ Module API en développement – les données ne sont pas encore importées automatiquement.")
+        st.info("🧩 Mode fichier Excel : télécharge ton export depuis Pennylane Connect")
+        fichier_excel = st.file_uploader("📂 Sélectionne ton fichier Excel Pennylane Connect", type=["xlsx"])
+        
+        if fichier_excel is not None:
+            try:
+                df = pd.read_excel(fichier_excel)
+                st.success(f"✅ Fichier chargé : {df.shape[0]} lignes")
+                st.dataframe(df.head())
+            except Exception as e:
+                st.error(f"❌ Impossible de lire le fichier : {e}")
 
     # --- Option 2 : Dossier partagé ---
     elif mode_import.startswith("2"):
-        st.info("📁 Mode dossier synchronisé : l’application surveille un dossier partagé (OneDrive, Drive...)")
+        st.info("📁 Mode dossier synchronisé : Streamlit accède automatiquement au fichier")
         dossier_path = st.text_input("Chemin du dossier synchronisé :", placeholder="ex: C:/Users/EC/OneDrive/Pennylane_Connect")
         
         if st.button("Charger les fichiers du dossier"):
