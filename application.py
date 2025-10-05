@@ -191,19 +191,19 @@ if menu == "Générateur d'écritures BLDD":
 # MODULE 2 : IMPORT COMPTABLE
 # =====================
 elif menu == "Import données comptables":
-    st.header("📂 Import des données Pennylane")
+    st.header("📂 Import des données comptables")
 
-    # --- Choix du mode ---
+    # Sélection du mode
     choix = st.radio(
         "Source des données :",
-        ["Pennylane Connect (Excel)", "API Pennylane (option avancée)"]
+        ["Pennylane Connect (Excel)", "Connexion API (multi-logiciels)"]
     )
 
     # ================================================================
-    # 🟦 MODE 1 : Import Excel via Pennylane Connect
+    # MODE 1 : Import Excel (Pennylane Connect)
     # ================================================================
     if choix == "Pennylane Connect (Excel)":
-        st.info("💡 Utilise ici les exports Pennylane Connect : Grand Livre, Journaux, Balance...")
+        st.info("💡 Importe ici les fichiers Excel exportés depuis Pennylane Connect (GL, Journaux, Balance...)")
 
         fichiers = st.file_uploader(
             "Importer un ou plusieurs fichiers Excel (.xlsx)",
@@ -218,7 +218,7 @@ elif menu == "Import données comptables":
                     df = pd.read_excel(fichier, dtype=str)
                     df.columns = df.columns.str.strip().str.lower()
 
-                    # Détection du type de fichier
+                    # Détection du type
                     nom = fichier.name.lower()
                     if "grand" in nom or "gl" in nom:
                         type_fichier = "Grand livre"
@@ -229,7 +229,7 @@ elif menu == "Import données comptables":
                     else:
                         type_fichier = "Inconnu"
 
-                    # Normalisation des colonnes principales
+                    # Normalisation colonnes
                     mapping = {
                         "date": "Date",
                         "journal": "Journal",
@@ -242,44 +242,75 @@ elif menu == "Import données comptables":
                     }
                     df = df.rename(columns={c: mapping.get(c, c) for c in df.columns})
 
-                    colonnes_cibles = ["Date", "Journal", "Compte", "Libelle", "Debit", "Credit"]
-                    for col in colonnes_cibles:
+                    for col in ["Date", "Journal", "Compte", "Libelle", "Debit", "Credit"]:
                         if col not in df.columns:
                             df[col] = None
 
-                    # Typage et nettoyage
                     df["Debit"] = pd.to_numeric(df["Debit"], errors="coerce").fillna(0)
                     df["Credit"] = pd.to_numeric(df["Credit"], errors="coerce").fillna(0)
                     df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
                     df["Source"] = type_fichier
-
-                    dfs.append(df[colonnes_cibles + ["Source"]])
+                    dfs.append(df[["Date", "Journal", "Compte", "Libelle", "Debit", "Credit", "Source"]])
                     st.success(f"✅ {fichier.name} importé ({type_fichier}) — {len(df)} lignes")
 
                 except Exception as e:
-                    st.error(f"Erreur lors de la lecture de {fichier.name} : {e}")
+                    st.error(f"Erreur lecture {fichier.name} : {e}")
 
-            # Fusion et contrôle global
             if dfs:
                 df_final = pd.concat(dfs, ignore_index=True)
-                st.subheader("📊 Données fusionnées")
                 st.dataframe(df_final.head(10))
+                st.info(f"Équilibre global : Débit = {df_final['Debit'].sum():,.2f} / Crédit = {df_final['Credit'].sum():,.2f}")
 
-                total_debit = df_final["Debit"].sum()
-                total_credit = df_final["Credit"].sum()
-                st.info(f"Équilibre global : Débit = {total_debit:,.2f} / Crédit = {total_credit:,.2f}")
-
-                # Export Excel standardisé
                 buffer = BytesIO()
                 with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
                     df_final.to_excel(writer, index=False, sheet_name="Comptabilite_fusionnee")
                 buffer.seek(0)
-
                 st.download_button(
                     label="📥 Télécharger les données standardisées",
                     data=buffer,
-                    file_name="Pennylane_Compta_Fusionnee.xlsx",
+                    file_name="Compta_Fusionnee.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+
+    # ================================================================
+    # MODE 2 : Connexion API générique
+    # ================================================================
+    elif choix == "Connexion API (multi-logiciels)":
+        st.info("🔗 Mode expert : connecte-toi à l'API d’un logiciel comptable (Pennylane, Sage, MyUnisoft, Tiime, etc.)")
+
+        logiciel = st.selectbox("Choisir le logiciel :", ["Pennylane", "MyUnisoft", "Sage", "QuickBooks", "Autre"])
+
+        api_key = st.text_input("🔐 Clé API ou Token d’accès", type="password")
+        url_base = st.text_input("🌐 URL de l’API (endpoint base)", placeholder="https://api.logiciel.com/v1/")
+
+        start_date = st.date_input("📆 Date de début")
+        end_date = st.date_input("📆 Date de fin")
+
+        if st.button("Importer via API"):
+            if not api_key or not url_base:
+                st.warning("Merci de renseigner la clé API et l’URL de l’API.")
+            else:
+                # Simulation (à adapter par logiciel)
+                st.info(f"Connexion simulée à l’API {logiciel}")
+
+                df_demo = pd.DataFrame({
+                    "Date": pd.date_range(start=start_date, end=end_date, freq="M"),
+                    "Journal": ["VT"]*3,
+                    "Compte": ["701000", "707000", "622000"],
+                    "Libelle": ["Ventes Livres", "Ventes Services", "Commissions"],
+                    "Debit": [0, 0, 1500],
+                    "Credit": [12000, 2000, 0],
+                    "Source": f"API {logiciel}"
+                })
+
+                st.success(f"✅ Données simulées récupérées depuis {logiciel}")
+                st.dataframe(df_demo)
+
+                st.download_button(
+                    label=f"📥 Télécharger données API {logiciel}",
+                    data=df_demo.to_csv(index=False).encode("utf-8"),
+                    file_name=f"{logiciel}_API_Demo.csv",
+                    mime="text/csv"
                 )
 
     # ================================================================
