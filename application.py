@@ -192,15 +192,95 @@ if menu == "Générateur d'écritures BLDD":
 # =====================
 elif menu == "Import données comptables":
     st.header("📂 Import des données comptables")
-    choix = st.radio("Méthode d’import", ["API Pennylane", "Excel"])
-    if choix == "API Pennylane":
-        st.info("Connexion à l’API Pennylane (placeholder). Ici, tu utiliseras les endpoints API.")
-    else:
-        fichier = st.file_uploader("Importer un fichier Excel comptable", type=["xlsx"])
+
+    # 1️⃣ Choix de la source
+    choix = st.radio("Choisis la source des données :", ["Fichier Excel", "API Pennylane"])
+
+    # 2️⃣ Import Excel
+    if choix == "Fichier Excel":
+        fichier = st.file_uploader("Importer un fichier comptable (.xlsx)", type=["xlsx"])
         if fichier:
-            df_compte = pd.read_excel(fichier)
-            st.success("✅ Données comptables importées")
-            st.dataframe(df_compte.head())
+            try:
+                df_compte = pd.read_excel(fichier, dtype=str)
+                st.success(f"✅ Fichier importé : {df_compte.shape[0]} lignes")
+                st.dataframe(df_compte.head())
+
+                # Mapping standard minimal
+                colonnes_dispo = list(df_compte.columns)
+                st.write("🧩 Colonnes détectées :", colonnes_dispo)
+
+                # Sélection manuelle des colonnes utiles
+                col_date = st.selectbox("🗓️ Colonne Date", colonnes_dispo)
+                col_journal = st.selectbox("📒 Colonne Journal", colonnes_dispo)
+                col_compte = st.selectbox("💰 Colonne Compte", colonnes_dispo)
+                col_libelle = st.selectbox("📝 Colonne Libellé", colonnes_dispo)
+                col_debit = st.selectbox("📈 Colonne Débit", colonnes_dispo)
+                col_credit = st.selectbox("📉 Colonne Crédit", colonnes_dispo)
+
+                if st.button("Nettoyer et standardiser"):
+                    df_clean = df_compte.rename(columns={
+                        col_date: "Date",
+                        col_journal: "Journal",
+                        col_compte: "Compte",
+                        col_libelle: "Libelle",
+                        col_debit: "Debit",
+                        col_credit: "Credit"
+                    })
+
+                    # Typage
+                    df_clean["Debit"] = pd.to_numeric(df_clean["Debit"], errors="coerce").fillna(0)
+                    df_clean["Credit"] = pd.to_numeric(df_clean["Credit"], errors="coerce").fillna(0)
+                    df_clean["Date"] = pd.to_datetime(df_clean["Date"], errors="coerce")
+
+                    # Nettoyage
+                    df_clean = df_clean.dropna(subset=["Compte", "Libelle"])
+                    st.success("✨ Données standardisées !")
+                    st.dataframe(df_clean.head())
+
+                    # Contrôle équilibre
+                    total_debit = df_clean["Debit"].sum()
+                    total_credit = df_clean["Credit"].sum()
+                    st.write(f"**Contrôle équilibre :** Débit = {total_debit:,.2f} / Crédit = {total_credit:,.2f}")
+
+                    # Export
+                    buffer = BytesIO()
+                    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+                        df_clean.to_excel(writer, index=False, sheet_name="Comptabilite_standard")
+                    buffer.seek(0)
+                    st.download_button(
+                        label="📥 Télécharger le fichier standardisé",
+                        data=buffer,
+                        file_name="Compta_standardisee.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                    )
+
+            except Exception as e:
+                st.error(f"Erreur lors de la lecture du fichier : {e}")
+
+    # 3️⃣ API Pennylane
+    elif choix == "API Pennylane":
+        st.info("🔗 Connexion à l’API Pennylane")
+
+        api_key = st.text_input("🔐 API Key Pennylane", type="password")
+        start_date = st.date_input("📆 Date de début")
+        end_date = st.date_input("📆 Date de fin")
+
+        if st.button("Importer depuis Pennylane"):
+            if not api_key:
+                st.warning("Merci de renseigner ton API Key Pennylane.")
+            else:
+                st.info("Connexion simulée (mode démo) — les endpoints API seront ajoutés ultérieurement.")
+                # Exemple de structure attendue
+                df_demo = pd.DataFrame({
+                    "Date": pd.date_range(start=start_date, end=end_date, freq="M"),
+                    "Journal": "VT",
+                    "Compte": ["701100"]*3,
+                    "Libelle": ["Ventes mensuelles"]*3,
+                    "Debit": [0]*3,
+                    "Credit": [15000, 12000, 18000],
+                })
+                st.success("✅ Données simulées depuis API Pennylane")
+                st.dataframe(df_demo)
 
 # =====================
 # MODULE 3 : SOCLE PIVOT
