@@ -258,47 +258,103 @@ elif menu == "Socle pivot analytique":
 
 
 # =====================
-# MODULE 4 : TABLEAUX & ANALYSES (Trésorerie incluse)
+# MODULE 4 : TABLEAUX & ANALYSES
 # =====================
 elif menu == "Tableaux & analyses":
-    st.header("📊 Tableaux et analyses")
+    st.header("📊 Tableaux & analyses")
+
+    # Vérifier que le socle pivot est généré
+    if "df_pivot" not in st.session_state:
+        st.warning("⚠️ Générer d'abord le socle pivot depuis le module Import données comptables.")
+        st.stop()
+    else:
+        df_pivot = st.session_state["df_pivot"].copy()
+
+    # Choix de l'analyse
     sous_menu = st.selectbox(
-        "Sélectionne un module",
+        "Choix de l'analyse",
         [
-            "Analyse synthétique",
+            "Dashboard analytique",
+            "Mini compte de résultat par ISBN",
             "Trésorerie prévisionnelle"
         ]
     )
 
-    if sous_menu == "Trésorerie prévisionnelle":
+    # ----------------------------
+    # Dashboard analytique
+    # ----------------------------
+    if sous_menu == "Dashboard analytique":
+        st.subheader("📈 Top 10 ISBN par résultat net")
+        df_pivot["Résultat"] = df_pivot["Crédit"] - df_pivot["Débit"]
+        top_isbn = df_pivot.groupby("Code_Analytique", as_index=False)["Résultat"].sum()
+        top_isbn = top_isbn.sort_values(by="Résultat", ascending=False).head(10)
+        if top_isbn.empty:
+            st.warning("⚠️ Aucun résultat disponible pour générer le dashboard.")
+        else:
+            st.dataframe(top_isbn)
+            import plotly.express as px
+            fig = px.bar(
+                top_isbn,
+                x="Code_Analytique",
+                y="Résultat",
+                title="Top 10 ISBN par résultat net",
+                labels={"Code_Analytique": "ISBN", "Résultat": "Résultat net"}
+            )
+            st.plotly_chart(fig, use_container_width=True)
+
+    # ----------------------------
+    # Mini compte de résultat par ISBN
+    # ----------------------------
+    elif sous_menu == "Mini compte de résultat par ISBN":
+        st.subheader("💼 Mini compte de résultat par ISBN")
+        df_cr = df_pivot.groupby("Code_Analytique", as_index=False).agg({
+            "Débit": "sum",
+            "Crédit": "sum"
+        })
+        df_cr["Résultat"] = df_cr["Crédit"] - df_cr["Débit"]
+        st.dataframe(df_cr)
+
+        # Export Excel
+        from io import BytesIO
+        buffer = BytesIO()
+        with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+            df_cr.to_excel(writer, index=False, sheet_name="Mini_CR_ISBN")
+        buffer.seek(0)
+        st.download_button(
+            label="📥 Télécharger le mini compte de résultat par ISBN",
+            data=buffer,
+            file_name="Mini_Compte_Resultat_ISBN.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+
+    # ----------------------------
+    # Trésorerie prévisionnelle
+    # ----------------------------
+    elif sous_menu == "Trésorerie prévisionnelle":
         st.subheader("💰 Trésorerie prévisionnelle")
-        if "df_pivot" not in st.session_state:
-            st.warning("⚠️ Générer d'abord le socle pivot complet.")
-            st.stop()
-        df_pivot = st.session_state["df_pivot"].copy()
-
+        # Paramètres
         date_debut = st.date_input("Date de départ", pd.to_datetime("2025-04-01"))
-        comptes_bancaires = df_pivot[df_pivot["Compte"].astype(str).str.startswith("5")]
-        comptes_avant_debut = comptes_bancaires[pd.to_datetime(comptes_bancaires["Date"], errors="coerce") < pd.to_datetime(date_debut)]
-        solde_depart = comptes_avant_debut["Crédit"].sum() - comptes_avant_debut["Débit"].sum()
-        st.info(f"Solde de départ calculé automatiquement : {solde_depart:,.2f} €")
-
         horizon = st.slider("Horizon de projection (mois)", 3, 24, 12)
         croissance_ca = st.number_input("Croissance mensuelle du CA (%)", value=2.0)
         evolution_charges = st.number_input("Évolution mensuelle des charges (%)", value=1.0)
 
+        # Calcul solde départ à partir de toutes les lignes bancaires
+        comptes_bancaires = df_pivot[df_pivot["Compte"].astype(str).str.startswith("5")]
+        comptes_avant_debut = comptes_bancaires[comptes_bancaires["Date"] < pd.to_datetime(date_debut)]
+        solde_depart = comptes_avant_debut["Crédit"].sum() - comptes_avant_debut["Débit"].sum()
+        st.info(f"Solde de départ calculé automatiquement : {solde_depart:,.2f} €")
+
         if st.button("📊 Générer la prévision"):
-            df_pivot["Date"] = pd.to_datetime(df_pivot["Date"], errors="coerce")
-            df_pivot = df_pivot.dropna(subset=["Date"])
             df_flux = df_pivot[df_pivot["Date"] >= pd.to_datetime(date_debut)]
             df_flux["Mois"] = df_flux["Date"].dt.to_period("M").astype(str)
             flux_mensuel = df_flux.groupby("Mois").agg({"Débit": "sum", "Crédit": "sum"}).reset_index()
             flux_mensuel["Solde_mensuel"] = flux_mensuel["Crédit"] - flux_mensuel["Débit"]
 
-            dernier_mois = pd.Period(flux_mensuel["Mois"].max(), freq="M") if not flux_mensuel.empty else pd.Period(pd.to_datetime(date_debut), freq="M")
+            dernier_mois = pd.Period(flux_mensuel["Mois"].max(), freq="M") if not flux_mensuel.empty else pd.Period(date_debut, freq="M")
             ca_actuel = flux_mensuel["Crédit"].iloc[-1] if not flux_mensuel.empty else 0
             charges_actuelles = flux_mensuel["Débit"].iloc[-1] if not flux_mensuel.empty else 0
 
+            # Projection future
             previsions = []
             for i in range(1, horizon + 1):
                 prochain_mois = (dernier_mois + i).strftime("%Y-%m")
@@ -311,9 +367,27 @@ elif menu == "Tableaux & analyses":
                     "Crédit": ca_actuel,
                     "Solde_mensuel": solde_prevu
                 })
+
             df_prev = pd.DataFrame(previsions)
             df_tresorerie = pd.concat([flux_mensuel, df_prev], ignore_index=True)
             df_tresorerie["Trésorerie_cumulée"] = solde_depart + df_tresorerie["Solde_mensuel"].cumsum()
+
+            # Graphique
+            import plotly.express as px
             fig = px.line(df_tresorerie, x="Mois", y="Trésorerie_cumulée", title="📈 Trésorerie prévisionnelle")
             st.plotly_chart(fig, use_container_width=True)
+
+            # Tableau détaillé
             st.dataframe(df_tresorerie)
+
+            # Export Excel
+            buffer = BytesIO()
+            with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+                df_tresorerie.to_excel(writer, index=False, sheet_name="Trésorerie prévisionnelle")
+            buffer.seek(0)
+            st.download_button(
+                label="📥 Télécharger la trésorerie prévisionnelle",
+                data=buffer,
+                file_name="Tresorerie_previsionnelle.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
