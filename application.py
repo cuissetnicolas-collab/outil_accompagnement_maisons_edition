@@ -202,44 +202,71 @@ if menu == "Générateur d'écritures BLDD":
         st.dataframe(df_ecr)
 
 # =====================
-# MODULE IMPORT & SOCLE PIVOT
+# MODULE IMPORT DONNEES COMPTABLES
 # =====================
 elif menu == "Import données comptables":
     st.header("📂 Importation des données comptables")
+
     fichier_comptables = st.file_uploader("📂 Sélectionne ton fichier Excel Pennylane Connect", type=["xlsx"])
+
     if fichier_comptables is not None:
         try:
             df = pd.read_excel(fichier_comptables, header=0)
             df.columns = df.columns.str.strip()
             st.write("Colonnes détectées :", list(df.columns))
+
+            # --- Renommer colonnes ---
             col_mapping = {}
-            if "Numéro de compte" in df.columns: col_mapping["Numéro de compte"] = "Compte"
-            if "Débit" in df.columns: col_mapping["Débit"] = "Débit"
-            if "Crédit" in df.columns: col_mapping["Crédit"] = "Crédit"
-            if "Familles de catégories" in df.columns: col_mapping["Familles de catégories"] = "Famille_Analytique"
-            if "Catégories" in df.columns: col_mapping["Catégories"] = "Code_Analytique"
-            if "Date" in df.columns: col_mapping["Date"] = "Date"
-            elif "Date opération" in df.columns: col_mapping["Date opération"] = "Date"
-            if "Compte" not in col_mapping.values():
-                st.error("⚠️ La colonne 'Compte' est manquante dans le fichier importé !")
-            elif "Date" not in col_mapping.values():
-                st.error("⚠️ La colonne 'Date' est manquante dans le fichier importé !")
-            else:
-                df.rename(columns=col_mapping, inplace=True)
-                df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
-                st.session_state["df_comptables"] = df
-                st.success(f"✅ Fichier chargé : {df.shape[0]} lignes")
-                st.dataframe(df.head())
-                if st.button("🛠️ Générer le socle pivot analytique"):
-                    pivot = df.groupby(
-                        ["Compte", "Famille_Analytique", "Code_Analytique", "Date"],
-                        as_index=False
-                    ).agg({"Débit": "sum", "Crédit": "sum"})
-                    st.session_state["df_pivot"] = pivot
-                    st.success("✅ Socle pivot analytique généré !")
-                    st.dataframe(pivot.head(20))
+            if "Numéro de compte" in df.columns:
+                col_mapping["Numéro de compte"] = "Compte"
+            if "Débit" in df.columns:
+                col_mapping["Débit"] = "Débit"
+            if "Crédit" in df.columns:
+                col_mapping["Crédit"] = "Crédit"
+            if "Familles de catégories" in df.columns:
+                col_mapping["Familles de catégories"] = "Famille_Analytique"
+            if "Catégories" in df.columns:
+                col_mapping["Catégories"] = "Code_Analytique"
+            if "Date" in df.columns:
+                col_mapping["Date"] = "Date"
+            elif "Date opération" in df.columns:
+                col_mapping["Date opération"] = "Date"
+
+            df.rename(columns=col_mapping, inplace=True)
+
+            st.session_state["df_comptables"] = df
+            st.success(f"✅ Fichier chargé : {df.shape[0]} lignes")
+            st.dataframe(df.head())
+
         except Exception as e:
             st.error(f"❌ Erreur lors de l'import : {e}")
+
+# =====================
+# MODULE SOCLE PIVOT ANALYTIQUE
+# =====================
+elif menu == "Socle pivot analytique":
+    st.header("🛠️ Socle pivot analytique")
+
+    if "df_comptables" not in st.session_state:
+        st.warning("⚠️ Importer d'abord un fichier dans le module Import données comptables.")
+    else:
+        df = st.session_state["df_comptables"]
+
+        # ⚡ Nettoyage
+        df["Compte"] = df["Compte"].fillna("0").astype(str)
+        df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
+
+        if st.button("Générer le socle pivot analytique"):
+            try:
+                pivot = df.groupby(
+                    ["Compte", "Famille_Analytique", "Code_Analytique", "Date"],
+                    as_index=False
+                ).agg({"Débit": "sum", "Crédit": "sum"})
+                st.session_state["df_pivot"] = pivot
+                st.success("✅ Socle pivot analytique généré !")
+                st.dataframe(pivot.head(20))
+            except Exception as e:
+                st.error(f"❌ Erreur lors de la génération du pivot : {e}")
 
 # =====================
 # MODULE 4 : TABLEAUX & ANALYSES (avec trésorerie)
