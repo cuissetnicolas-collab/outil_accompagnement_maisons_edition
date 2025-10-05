@@ -250,11 +250,25 @@ elif menu == "Import données comptables":
         ]
     )
 
+    # --- Option 1 : API directe ---
     if mode_import.startswith("1"):
         st.info("🔗 Mode API : connexion directe à Pennylane, MyUnisoft, QuickBooks, etc.")
-        st.warning("⚠️ Module API en développement – nécessite configuration des identifiants et clés API.")
-        # Ici tu pourrais intégrer la connexion API si tu veux automatiser l'import
 
+        st.subheader("⚙️ Paramètres API")
+        api_url = st.text_input("URL de l'API", placeholder="https://api.pennylane.com/...")
+        api_key = st.text_input("Clé API", type="password")
+        api_secret = st.text_input("Secret API", type="password")
+        compte_id = st.text_input("ID du compte / société", placeholder="Ex: 123456")
+
+        if st.button("Tester la connexion API"):
+            if api_url and api_key and api_secret:
+                st.success("✅ Connexion test OK (simulation pour l'instant)")
+            else:
+                st.error("❌ Merci de renseigner tous les champs pour tester la connexion")
+
+        st.info("⚠️ Module API en développement – les données ne sont pas encore importées automatiquement.")
+
+    # --- Option 2 : Dossier partagé ---
     elif mode_import.startswith("2"):
         st.info("📁 Mode dossier synchronisé : l’application surveille un dossier partagé (OneDrive, Drive...)")
         dossier_path = st.text_input("Chemin du dossier synchronisé :", placeholder="ex: C:/Users/EC/OneDrive/Pennylane_Connect")
