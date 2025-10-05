@@ -347,13 +347,98 @@ elif menu == "Tableaux & analyses":
     st.header("📊 Tableaux & analyses")
     sous_menu = st.selectbox("Choix de l'analyse", [
         "Dashboard analytique",
-        "Trésorerie prévisionnelle",
-        "Seuil de rentabilité",
-        "Droits d’auteur",
-        "Contrôle TVA / Dépôt légal"
+        "Mini compte de résultat par ISBN"
     ])
-    if "df_pivot" in st.session_state:
-        st.info(f"📌 Module {sous_menu} utilisant le socle pivot (en développement)")
-        st.dataframe(st.session_state["df_pivot"].head(20))
+
+    # Vérification que le socle pivot est présent
+    if "df_pivot" not in st.session_state:
+        st.warning("⚠️ Générer d'abord le socle pivot dans le module Import données comptables.")
     else:
-        st.warning("⚠️ Générer d'abord le socle pivot depuis le module Import données comptables.")
+        pivot = st.session_state["df_pivot"]
+
+        # Filtre période si colonnes Date disponibles
+        if "Date" in pivot.columns:
+            st.subheader("📅 Filtrer par période")
+            pivot["Date"] = pd.to_datetime(pivot["Date"], errors="coerce")
+            date_min = pivot["Date"].min()
+            date_max = pivot["Date"].max()
+            date_debut = st.date_input("Date début", value=date_min)
+            date_fin = st.date_input("Date fin", value=date_max)
+            pivot_filtered = pivot[(pivot["Date"] >= pd.Timestamp(date_debut)) & (pivot["Date"] <= pd.Timestamp(date_fin))]
+        else:
+            pivot_filtered = pivot
+
+        # ----------------------------
+        # Mini compte de résultat par ISBN
+        # ----------------------------
+        if sous_menu == "Mini compte de résultat par ISBN":
+            st.subheader("💰 Mini Compte de Résultat par ISBN / Code Analytique")
+
+            # Paramétrage comptes
+            st.markdown("**Définir les comptes Ventes et Charges**")
+            comptes_ventes = st.text_area("Comptes Ventes (séparés par virgule)", value="70110000")
+            comptes_ventes = [c.strip() for c in comptes_ventes.split(",")]
+
+            comptes_charges = st.text_area("Comptes Charges (séparés par virgule)", value="62280000,62280001")
+            comptes_charges = [c.strip() for c in comptes_charges.split(",")]
+
+            # Bouton génération mini CR
+            if st.button("🛠️ Générer mini compte de résultat"):
+                # Agrégation par code analytique
+                df_cr = pivot_filtered.groupby("Code_Analytique").agg({
+                    "Débit": "sum",
+                    "Crédit": "sum"
+                }).reset_index()
+
+                # Calcul Ventes et Charges
+                df_cr["Ventes"] = pivot_filtered[pivot_filtered["Compte"].isin(comptes_ventes)].groupby("Code_Analytique")["Crédit"].sum()
+                df_cr["Charges"] = pivot_filtered[pivot_filtered["Compte"].isin(comptes_charges)].groupby("Code_Analytique")["Débit"].sum()
+                df_cr = df_cr.fillna(0)
+                df_cr["Résultat"] = df_cr["Ventes"] - df_cr["Charges"]
+
+                # Résultat global
+                resultat_global = df_cr["Résultat"].sum()
+                st.metric("Résultat global période sélectionnée", f"{resultat_global:,.2f} €")
+
+                # Tableau interactif
+                st.dataframe(df_cr[["Code_Analytique", "Ventes", "Charges", "Résultat"]].sort_values("Résultat", ascending=False))
+
+                # Graphique
+                st.bar_chart(df_cr.set_index("Code_Analytique")["Résultat"])
+
+                # Export Excel
+                buffer_cr = BytesIO()
+                with pd.ExcelWriter(buffer_cr, engine="openpyxl") as writer:
+                    df_cr.to_excel(writer, index=False, sheet_name="Mini_CR_ISBN")
+                buffer_cr.seek(0)
+                st.download_button(
+                    label="📥 Télécharger le mini compte de résultat par ISBN",
+                    data=buffer_cr,
+                    file_name="Mini_CR_ISBN.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+
+        # ----------------------------
+        # Dashboard analytique simple
+        # ----------------------------
+        elif sous_menu == "Dashboard analytique":
+            st.subheader("📊 Dashboard analytique")
+
+            # Exemple simple : total Débit / Crédit par Famille Analytique
+            pivot_dashboard = pivot_filtered.groupby("Famille_Analytique").agg({
+                "Débit": "sum",
+                "Crédit": "sum"
+            }).reset_index()
+            st.dataframe(pivot_dashboard)
+
+            # Graphique comparatif Débit / Crédit
+            import altair as alt
+            chart = alt.Chart(pivot_dashboard).transform_fold(
+                ["Débit", "Crédit"],
+                as_=['Type', 'Montant']
+            ).mark_bar().encode(
+                x='Famille_Analytique:N',
+                y='Montant:Q',
+                color='Type:N'
+            )
+            st.altair_chart(chart, use_container_width=True)
