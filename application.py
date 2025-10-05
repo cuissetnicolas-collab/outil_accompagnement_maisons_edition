@@ -82,17 +82,23 @@ if menu == "Générateur d'écritures BLDD":
     if not famille_analytique:
         st.warning("⚠️ Merci de renseigner la famille analytique avant de générer les écritures.")
 
-    # --- Import fichier BLDD ---
+    # --- Import fichier BLDD (.xls ou .xlsx) ---
     st.markdown("---")
-    fichier_entree = st.file_uploader("📂 Importer le fichier Excel BLDD", type=["xls", "xlsx"])
+    fichier_entree = st.file_uploader("📂 Importer le fichier Excel BLDD", type=None)
 
     if fichier_entree is not None:
+        if not fichier_entree.name.endswith((".xls", ".xlsx")):
+            st.error("❌ Format de fichier non supporté. Merci de fournir un .xls ou .xlsx")
+            st.stop()
+
+        # Lecture avec pandas
         try:
             df = pd.read_excel(fichier_entree, header=9, dtype={"ISBN": str})
         except Exception as e:
             st.error(f"❌ Impossible de lire le fichier Excel : {e}")
             st.stop()
 
+        # --- Nettoyage des données ---
         df.columns = df.columns.str.strip()
         df = df.dropna(subset=["ISBN"]).copy()
         df["ISBN"] = (
@@ -107,19 +113,13 @@ if menu == "Générateur d'écritures BLDD":
             df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0).round(2)
 
         # --- Calcul commissions ---
-        # Distribution
         raw_dist = df["Vente"] * taux_dist
         sum_raw_dist = raw_dist.sum()
-        df["Commission_distribution"] = (
-            raw_dist * (com_distribution_total / sum_raw_dist) if sum_raw_dist else 0
-        )
+        df["Commission_distribution"] = raw_dist * (com_distribution_total / sum_raw_dist) if sum_raw_dist else 0
 
-        # Diffusion
         raw_diff = df["Net"] * taux_diff
         sum_raw_diff = raw_diff.sum()
-        df["Commission_diffusion"] = (
-            raw_diff * (com_diffusion_total / sum_raw_diff) if sum_raw_diff else 0
-        )
+        df["Commission_diffusion"] = raw_diff * (com_diffusion_total / sum_raw_diff) if sum_raw_diff else 0
 
         # --- Construction écritures ---
         ecritures = []
@@ -208,14 +208,14 @@ if menu == "Générateur d'écritures BLDD":
         else:
             st.success("✅ Écritures équilibrées et prêtes à l’import Pennylane !")
 
-        # Export Excel
+        # --- Export Excel (.xlsx) ---
         buffer = BytesIO()
         with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
             df_ecr.to_excel(writer, index=False, sheet_name="Ecritures")
         buffer.seek(0)
 
         st.download_button(
-            label="📥 Télécharger les écritures analytiques (Excel)",
+            label="📥 Télécharger les écritures analytiques (.xlsx)",
             data=buffer,
             file_name="Ecritures_Pennylane_Analytique.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
