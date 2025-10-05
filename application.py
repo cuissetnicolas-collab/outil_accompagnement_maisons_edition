@@ -332,6 +332,7 @@ if menu == "Socle pivot analytique":
                 data=buffer,
                 file_name="Socle_Pivot_Analytique.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )  # <-- parenthèse fermée ici
 # =====================
 # MODULE 4 : TABLEAUX & ANALYSES
 # =====================
