@@ -196,7 +196,7 @@ if menu == "Générateur d'écritures BLDD":
         st.dataframe(df_ecr)
 
 # =====================
-# MODULE 2 : IMPORT DONNEES COMPTABLES
+# MODULE 2 : IMPORT COMPTABLE + SOCLE PIVOT
 # =====================
 elif menu == "Import données comptables":
     st.header("📂 Importation des données comptables")
@@ -210,67 +210,98 @@ elif menu == "Import données comptables":
         ]
     )
 
-    df_comptables = None
+    df_comptables = None  # Initialisation
 
+    # --- Option 1 : Pennylane Connect ---
     if mode_import.startswith("1"):
-        fichier_excel = st.file_uploader("📂 Sélectionne ton fichier Excel", type=["xlsx"])
-        if fichier_excel:
-            df_comptables = pd.read_excel(fichier_excel)
-            st.success(f"✅ Fichier chargé : {df_comptables.shape[0]} lignes")
-            st.dataframe(df_comptables.head())
+        st.info("🧩 Mode fichier Excel : télécharge ton export depuis Pennylane Connect")
+        fichier_excel = st.file_uploader("📂 Sélectionne ton fichier Excel Pennylane Connect", type=["xlsx"])
+        
+        if fichier_excel is not None:
+            try:
+                df_comptables = pd.read_excel(fichier_excel)
+                st.success(f"✅ Fichier chargé : {df_comptables.shape[0]} lignes")
+                st.dataframe(df_comptables.head())
+            except Exception as e:
+                st.error(f"❌ Impossible de lire le fichier : {e}")
 
+    # --- Option 2 : Dossier partagé ---
     elif mode_import.startswith("2"):
-        dossier_path = st.text_input("Chemin du dossier synchronisé :")
+        st.info("📁 Mode dossier synchronisé : Streamlit accède automatiquement aux fichiers")
+        dossier_path = st.text_input("Chemin du dossier synchronisé :", placeholder="ex: C:/Users/EC/OneDrive/Pennylane_Connect")
+        
         if st.button("Charger les fichiers du dossier"):
             fichiers = glob.glob(os.path.join(dossier_path, "*.xlsx"))
             if fichiers:
                 dfs = [pd.read_excel(f) for f in fichiers]
                 df_comptables = pd.concat(dfs, ignore_index=True)
-                st.success(f"{len(df_comptables)} lignes chargées depuis {dossier_path}")
+                st.success(f"{len(fichiers)} fichiers chargés automatiquement depuis {dossier_path}")
                 st.dataframe(df_comptables.head())
             else:
-                st.warning("Aucun fichier trouvé")
+                st.warning("Aucun fichier trouvé dans le dossier indiqué.")
 
+    # --- Option 3 : API directe ---
     elif mode_import.startswith("3"):
-        st.info("🔗 Module API en développement")
-        api_url = st.text_input("URL API")
+        st.info("🔗 Mode API : connexion directe à Pennylane, MyUnisoft, QuickBooks, etc.")
+        st.subheader("⚙️ Paramètres API")
+        api_url = st.text_input("URL de l'API", placeholder="https://api.pennylane.com/...")
         api_key = st.text_input("Clé API", type="password")
         api_secret = st.text_input("Secret API", type="password")
-        compte_id = st.text_input("ID du compte / société")
+        compte_id = st.text_input("ID du compte / société", placeholder="Ex: 123456")
+
         if st.button("Tester la connexion API"):
             if api_url and api_key and api_secret:
-                st.success("✅ Connexion test OK (simulation)")
+                st.success("✅ Connexion test OK (simulation pour l'instant)")
             else:
-                st.error("❌ Merci de renseigner tous les champs")
+                st.error("❌ Merci de renseigner tous les champs pour tester la connexion")
 
-    # Stockage session_state
+        st.info("⚠️ Module API en développement – les données ne sont pas encore importées automatiquement.")
+
+    # --- Génération socle pivot ---
     if df_comptables is not None:
+        # Stockage dans session_state pour réutilisation dans Socle pivot
         st.session_state["df_comptables"] = df_comptables
+
+        # Bouton pour générer le pivot
         if st.button("🛠️ Générer le socle pivot analytique"):
+            df_comptables = st.session_state["df_comptables"]
+
+            # --- Mapping colonnes Pennylane → socle pivot ---
+            rename_map = {
+                "Numéro de compte": "Compte",
+                "Familles de catégories": "Famille_Analytique",
+                "Catégories": "Code_Analytique",
+                "Débit": "Débit",
+                "Crédit": "Crédit"
+            }
+            for col in rename_map:
+                if col not in df_comptables.columns:
+                    st.warning(f"⚠️ Colonne attendue absente : {col}")
+                    df_comptables[col] = ""
+
+            df_comptables = df_comptables.rename(columns=rename_map)
+            df_comptables.columns = df_comptables.columns.str.strip()
+
+            # Pivot analytique : somme par compte et code analytique
             pivot = df_comptables.groupby(
                 ["Compte", "Famille_Analytique", "Code_Analytique"], as_index=False
             ).agg({"Débit":"sum", "Crédit":"sum"})
+
             st.session_state["df_pivot"] = pivot
-            st.success("✅ Socle pivot généré !")
+            st.success("✅ Socle pivot analytique généré !")
             st.dataframe(pivot.head(20))
+
+            # Export Excel
             buffer = BytesIO()
             with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
                 pivot.to_excel(writer, index=False, sheet_name="Socle_Pivot")
             buffer.seek(0)
-            st.download_button("📥 Télécharger le socle pivot analytique", buffer,
-                               "Socle_Pivot_Analytique.xlsx",
-                               mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-
-# =====================
-# MODULE 3 : SOCLE PIVOT
-# =====================
-elif menu == "Socle pivot analytique":
-    st.header("🏗️ Socle pivot analytique")
-    if "df_pivot" in st.session_state:
-        st.success("✅ Socle pivot disponible")
-        st.dataframe(st.session_state["df_pivot"].head(20))
-    else:
-        st.warning("⚠️ Générer d'abord le socle pivot depuis le module Import données comptables.")
+            st.download_button(
+                label="📥 Télécharger le socle pivot analytique",
+                data=buffer,
+                file_name="Socle_Pivot_Analytique.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
 
 # =====================
 # MODULE 4 : TABLEAUX & ANALYSES
