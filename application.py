@@ -297,42 +297,54 @@ elif menu == "Import données comptables":
                 st.error("❌ Merci de renseigner tous les champs pour tester la connexion")
 
         st.info("⚠️ Module API en développement – les données ne sont pas encore importées automatiquement.")
+        # --- Après avoir importé le fichier Pennylane Connect ---
+if fichier_comptables is not None:
+    df_comptables = pd.read_excel(fichier_comptables, header=9)
+    st.session_state["df_comptables"] = df_comptables
+    st.success(f"{len(df_comptables)} lignes importées avec succès !")
+    st.dataframe(df_comptables.head(10))
+
+    # Bouton pour générer le socle pivot
+    if st.button("🛠️ Générer le socle pivot analytique"):
+        df_compta = st.session_state["df_comptables"]
+
+        # Pivot analytique : somme par compte et code analytique
+        pivot = df_compta.groupby(
+            ["Compte", "Famille_Analytique", "Code_Analytique"], as_index=False
+        ).agg({
+            "Débit": "sum",
+            "Crédit": "sum"
+        })
+
+        # Stockage dans session_state
+        st.session_state["df_pivot"] = pivot
+        st.success("✅ Socle pivot analytique généré et stocké !")
+        st.dataframe(pivot.head(20))
+
+        # Export Excel
+        from io import BytesIO
+        buffer = BytesIO()
+        with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+            pivot.to_excel(writer, index=False, sheet_name="Socle_Pivot")
+        buffer.seek(0)
+
+        st.download_button(
+            label="📥 Télécharger le socle pivot analytique",
+            data=buffer,
+            file_name="Socle_Pivot_Analytique.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
 # =====================
 # MODULE 3 : SOCLE PIVOT
 # =====================
 if menu == "Socle pivot analytique":
     st.header("🏗️ Socle pivot analytique")
 
-    if "df_comptables" not in st.session_state or st.session_state["df_comptables"].empty:
-        st.warning("⚠️ Importez d'abord les données comptables dans le module précédent.")
+    if "df_pivot" in st.session_state:
+        st.success("✅ Socle pivot disponible")
+        st.dataframe(st.session_state["df_pivot"].head(20))
     else:
-        if st.button("🛠️ Générer le socle pivot"):
-            df_compta = st.session_state["df_comptables"]
-
-            # Pivot analytique : somme par compte et code analytique
-            pivot = df_compta.groupby(
-                ["Compte", "Famille_Analytique", "Code_Analytique"], as_index=False
-            ).agg({
-                "Débit": "sum",
-                "Crédit": "sum"
-            })
-
-            st.success("✅ Socle pivot analytique généré !")
-            st.dataframe(pivot.head(20))
-
-            # Export Excel
-            from io import BytesIO
-            buffer = BytesIO()
-            with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
-                pivot.to_excel(writer, index=False, sheet_name="Socle_Pivot")
-            buffer.seek(0)
-
-            st.download_button(
-                label="📥 Télécharger le socle pivot analytique",
-                data=buffer,
-                file_name="Socle_Pivot_Analytique.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-            )  # <-- parenthèse fermée ici
+        st.warning("⚠️ Générer d'abord le socle pivot depuis le module Import données comptables.")
 # =====================
 # MODULE 4 : TABLEAUX & ANALYSES
 # =====================
