@@ -361,83 +361,68 @@ if menu == "Tableaux & analyses":
         # =====================
         # DASHBOARD ANALYTIQUE
         # =====================
-if menu == "Tableaux & analyses":
-    st.header("📊 Dashboard analytique")
+elif menu == "Tableaux & analyses":
+    st.header("📊 Tableaux & analyses")
 
     if "df_pivot" not in st.session_state:
-        st.warning("⚠️ Aucun socle pivot disponible. Veuillez générer le socle pivot depuis le module Import données comptables.")
+        st.warning("⚠️ Générer d'abord le socle pivot depuis le module Import données comptables.")
     else:
-        df = st.session_state["df_pivot"].copy()
+        df_pivot = st.session_state["df_pivot"]
 
-        # Calcul du résultat par ISBN (ou code analytique choisi)
-        df["Résultat"] = df["Crédit"] - df["Débit"]
+        sous_menu = st.selectbox("Choix de l'analyse", [
+            "Dashboard analytique",
+            "Mini compte de résultat par ISBN"
+        ])
 
-        # Top 10 ISBN par résultat
-        top_isbn = df.groupby("Code_Analytique")["Résultat"].sum().sort_values(ascending=False).head(10)
-        st.subheader("🏆 Top 10 ISBN par résultat net")
-        fig = px.bar(
-            top_isbn.reset_index(),
-            x="Code_Analytique",
-            y="Résultat",
-            text="Résultat",
-            labels={"Code_Analytique": "ISBN", "Résultat": "Résultat net"},
-            title="Top 10 ISBN"
-        )
-        fig.update_traces(texttemplate="%{text:.2f}", textposition="outside")
-        st.plotly_chart(fig, use_container_width=True)
-
-        # Indicateurs globaux
-        st.subheader("📌 Indicateurs globaux")
-        total_debit = df["Débit"].sum()
-        total_credit = df["Crédit"].sum()
-        total_resultat = df["Résultat"].sum()
-        st.metric("Total Débit", f"{total_debit:,.2f}")
-        st.metric("Total Crédit", f"{total_credit:,.2f}")
-        st.metric("Résultat net global", f"{total_resultat:,.2f}")
-
-        # Répartition par compte
-        st.subheader("📊 Répartition par compte")
-        pivot_compte = df.groupby("Compte")[["Débit", "Crédit", "Résultat"]].sum().sort_values("Résultat", ascending=False)
-        fig2 = px.bar(
-            pivot_compte.reset_index(),
-            x="Compte",
-            y="Résultat",
-            text="Résultat",
-            labels={"Résultat": "Résultat net"},
-            title="Résultat par compte"
-        )
-        fig2.update_traces(texttemplate="%{text:.2f}", textposition="outside")
-        st.plotly_chart(fig2, use_container_width=True)
-
-        # =====================
-        # MINI COMPTE DE RÉSULTAT PAR ISBN
-        # =====================
-        elif sous_menu == "Mini compte de résultat par ISBN":
-            st.subheader("📄 Mini compte de résultat par ISBN")
-
-            isbn_select = st.selectbox("Sélectionnez l'ISBN :", df_pivot["Code_Analytique"].unique())
+        # -------------------------
+        # Dashboard analytique
+        # -------------------------
+        if sous_menu == "Dashboard analytique":
+            st.subheader("📈 Top 10 ISBN par résultat net")
             
-            df_isbn = df_pivot[df_pivot["Code_Analytique"] == isbn_select]
+            # Calcul résultat net par ISBN
+            df_pivot["Résultat"] = df_pivot["Crédit"] - df_pivot["Débit"]
+            top_isbn = df_pivot.groupby("Code_Analytique", as_index=False)["Résultat"].sum()
+            top_isbn = top_isbn.sort_values(by="Résultat", ascending=False).head(10)
 
-            df_isbn_cr = df_isbn.groupby("Compte").agg({
-                "Débit":"sum",
-                "Crédit":"sum"
-            }).reset_index()
-            df_isbn_cr['Résultat_net'] = df_isbn_cr['Crédit'] - df_isbn_cr['Débit']
+            if top_isbn.empty:
+                st.warning("⚠️ Aucun résultat trouvé pour générer le dashboard.")
+            else:
+                st.dataframe(top_isbn)
 
-            st.dataframe(df_isbn_cr)
+                import plotly.express as px
+                fig = px.bar(top_isbn, x="Code_Analytique", y="Résultat",
+                             title="Top 10 ISBN par résultat net",
+                             labels={"Code_Analytique": "ISBN", "Résultat": "Résultat net"})
+                st.plotly_chart(fig, use_container_width=True)
+
+        # -------------------------
+        # Mini compte de résultat par ISBN
+        # -------------------------
+        elif sous_menu == "Mini compte de résultat par ISBN":
+            st.subheader("💼 Mini compte de résultat par ISBN")
+
+            # On reprend le socle pivot et on calcule CA, charges et résultat par ISBN
+            df_cr = df_pivot.groupby("Code_Analytique", as_index=False).agg({
+                "Débit": "sum",
+                "Crédit": "sum"
+            })
+
+            df_cr["Résultat"] = df_cr["Crédit"] - df_cr["Débit"]
+
+            st.dataframe(df_cr)
 
             # Export Excel
             from io import BytesIO
             buffer = BytesIO()
             with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
-                df_isbn_cr.to_excel(writer, index=False, sheet_name=f"CR_{isbn_select}")
+                df_cr.to_excel(writer, index=False, sheet_name="Mini_CR_ISBN")
             buffer.seek(0)
 
             st.download_button(
-                label=f"📥 Télécharger le mini compte de résultat pour {isbn_select}",
+                label="📥 Télécharger le mini compte de résultat par ISBN",
                 data=buffer,
-                file_name=f"Mini_CR_{isbn_select}.xlsx",
+                file_name="Mini_Compte_Resultat_ISBN.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
 
