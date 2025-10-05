@@ -87,20 +87,16 @@ if menu == "Générateur d'écritures BLDD":
     fichier_entree = st.file_uploader("📂 Importer le fichier Excel BLDD", type=None)
 
     if fichier_entree is not None:
-        if fichier_entree.name.endswith(".xls"):
-            try:
+        try:
+            if fichier_entree.name.endswith(".xls"):
                 df = pd.read_excel(fichier_entree, header=9, dtype={"ISBN": str}, engine="xlrd")
-            except Exception as e:
-                st.error(f"❌ Impossible de lire le fichier .xls : {e}")
-                st.stop()
-        elif fichier_entree.name.endswith(".xlsx"):
-            try:
+            elif fichier_entree.name.endswith(".xlsx"):
                 df = pd.read_excel(fichier_entree, header=9, dtype={"ISBN": str}, engine="openpyxl")
-            except Exception as e:
-                st.error(f"❌ Impossible de lire le fichier .xlsx : {e}")
+            else:
+                st.error("❌ Format non supporté, merci de fournir un .xls ou .xlsx")
                 st.stop()
-        else:
-            st.error("❌ Format non supporté, merci de fournir un .xls ou .xlsx")
+        except Exception as e:
+            st.error(f"❌ Impossible de lire le fichier : {e}")
             st.stop()
 
         # --- Nettoyage des données ---
