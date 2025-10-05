@@ -202,7 +202,7 @@ if menu == "Générateur d'écritures BLDD":
         st.dataframe(df_ecr)
 
 # =====================
-# MODULE IMPORT DONNEES COMPTABLES
+# MODULE 2 & 3 : IMPORT DONNÉES COMPTABLES + SOCLE PIVOT
 # =====================
 elif menu == "Import données comptables":
     st.header("📂 Importation des données comptables")
@@ -212,10 +212,10 @@ elif menu == "Import données comptables":
     if fichier_comptables is not None:
         try:
             df = pd.read_excel(fichier_comptables, header=0)
-            df.columns = df.columns.str.strip()
+            df.columns = df.columns.str.strip()  # Nettoyage des espaces
             st.write("Colonnes détectées :", list(df.columns))
 
-            # --- Renommer colonnes ---
+            # --- Renommer les colonnes pour le pivot ---
             col_mapping = {}
             if "Numéro de compte" in df.columns:
                 col_mapping["Numéro de compte"] = "Compte"
@@ -232,41 +232,54 @@ elif menu == "Import données comptables":
             elif "Date opération" in df.columns:
                 col_mapping["Date opération"] = "Date"
 
-            df.rename(columns=col_mapping, inplace=True)
+            if "Compte" not in col_mapping.values():
+                st.error("⚠️ La colonne 'Compte' est manquante dans le fichier importé !")
+            elif "Date" not in col_mapping.values():
+                st.error("⚠️ La colonne 'Date' est manquante dans le fichier importé !")
+            else:
+                df.rename(columns=col_mapping, inplace=True)
 
-            st.session_state["df_comptables"] = df
-            st.success(f"✅ Fichier chargé : {df.shape[0]} lignes")
-            st.dataframe(df.head())
+                st.session_state["df_comptables"] = df
+                st.success(f"✅ Fichier chargé : {df.shape[0]} lignes")
+                st.dataframe(df.head())
+
+                # --- Générer socle pivot analytique incluant les comptes bancaires ---
+                if st.button("🛠️ Générer le socle pivot analytique"):
+                    try:
+                        # Assurer que les colonnes essentielles existent
+                        for col in ["Compte", "Date", "Débit", "Crédit"]:
+                            if col not in df.columns:
+                                st.error(f"⚠️ La colonne '{col}' est manquante dans le fichier.")
+                                st.stop()
+
+                        # Remplir les NaN pour analytique par une valeur vide pour conserver toutes les lignes
+                        if "Famille_Analytique" not in df.columns:
+                            df["Famille_Analytique"] = ""
+                        else:
+                            df["Famille_Analytique"] = df["Famille_Analytique"].fillna("")
+                        if "Code_Analytique" not in df.columns:
+                            df["Code_Analytique"] = ""
+                        else:
+                            df["Code_Analytique"] = df["Code_Analytique"].fillna("")
+
+                        # Convertir la colonne Date
+                        df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
+
+                        # Pivot incluant toutes les lignes (y compris comptes bancaires)
+                        pivot = df.groupby(
+                            ["Compte", "Famille_Analytique", "Code_Analytique", "Date"],
+                            as_index=False
+                        ).agg({"Débit": "sum", "Crédit": "sum"})
+
+                        st.session_state["df_pivot"] = pivot
+                        st.success("✅ Socle pivot analytique généré ! Toutes les lignes bancaires sont conservées.")
+                        st.dataframe(pivot.head(20))
+
+                    except Exception as e:
+                        st.error(f"❌ Erreur lors de la génération du pivot : {e}")
 
         except Exception as e:
-            st.error(f"❌ Erreur lors de l'import : {e}")
-
-# =====================
-# MODULE SOCLE PIVOT ANALYTIQUE
-# =====================
-elif menu == "Socle pivot analytique":
-    st.header("🛠️ Socle pivot analytique")
-
-    if "df_comptables" not in st.session_state:
-        st.warning("⚠️ Importer d'abord un fichier dans le module Import données comptables.")
-    else:
-        df = st.session_state["df_comptables"]
-
-        # ⚡ Nettoyage
-        df["Compte"] = df["Compte"].fillna("0").astype(str)
-        df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
-
-        if st.button("Générer le socle pivot analytique"):
-            try:
-                pivot = df.groupby(
-                    ["Compte", "Famille_Analytique", "Code_Analytique", "Date"],
-                    as_index=False
-                ).agg({"Débit": "sum", "Crédit": "sum"})
-                st.session_state["df_pivot"] = pivot
-                st.success("✅ Socle pivot analytique généré !")
-                st.dataframe(pivot.head(20))
-            except Exception as e:
-                st.error(f"❌ Erreur lors de la génération du pivot : {e}")
+            st.error(f"❌ Erreur lors de l'importation : {e}")
 
 # =====================
 # MODULE 4 : TABLEAUX & ANALYSES
