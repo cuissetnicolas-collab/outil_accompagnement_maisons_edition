@@ -2,6 +2,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 from io import BytesIO
+import glob, os
 
 # =====================
 # AUTHENTIFICATION
@@ -88,43 +89,190 @@ if menu == "Générateur d'écritures BLDD":
 
     # ========== Traitement ==========  
     if fichier_entree is not None and famille_analytique:
-        # ... tout le reste du code BLDD ...
+        df = pd.read_excel(fichier_entree, header=9, dtype={"ISBN": str})
+        df.columns = df.columns.str.strip()
+        df = df.dropna(subset=["ISBN"]).copy()
+
+        df["ISBN"] = df["ISBN"].astype(str).str.strip().str.replace(r'\.0$', '', regex=True)
+        df["ISBN"] = df["ISBN"].str.replace('-', '', regex=False).str.replace(' ', '', regex=False)
+
+        for c in ["Vente", "Net", "Facture"]:
+            df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0).round(2)
+
+        # --- Distribution ---
+        raw_dist = df["Vente"] * taux_dist
+        sum_raw_dist = raw_dist.sum()
+        scaled_dist = raw_dist * (com_distribution_total / sum_raw_dist)
+        cents_floor = np.floor(scaled_dist * 100).astype(int)
+        remainders = (scaled_dist * 100) - cents_floor
+        target_cents = int(round(com_distribution_total * 100))
+        diff = target_cents - cents_floor.sum()
+        idx_sorted = np.argsort(-remainders.values)
+        adjust = np.zeros(len(df), dtype=int)
+        if diff > 0:
+            adjust[idx_sorted[:diff]] = 1
+        elif diff < 0:
+            adjust[idx_sorted[len(df)+diff:]] = -1
+        df["Commission_distribution"] = (cents_floor + adjust) / 100.0
+
+        # --- Diffusion ---
+        raw_diff = df["Net"] * taux_diff
+        sum_raw_diff = raw_diff.sum()
+        scaled_diff = raw_diff * (com_diffusion_total / sum_raw_diff)
+        cents_floor = np.floor(scaled_diff * 100.0).astype(int)
+        remainders = (scaled_diff * 100.0) - cents_floor
+        target_cents = int(round(com_diffusion_total * 100))
+        diff = target_cents - cents_floor.sum()
+        idx_sorted = np.argsort(-remainders.values)
+        adjust = np.zeros(len(df), dtype=int)
+        if diff > 0:
+            adjust[idx_sorted[:diff]] = 1
+        elif diff < 0:
+            adjust[idx_sorted[len(df)+diff:]] = -1
+        df["Commission_diffusion"] = (cents_floor + adjust) / 100.0
+
+        # --- Construction écritures ---
+        ecritures = []
+        total_facture_global = df["Facture"].sum().round(2)
+
+        # CA global
+        ecritures.append({
+            "Date": date_ecriture.strftime("%d/%m/%Y"),
+            "Journal": journal,
+            "Compte": compte_ca,
+            "Libelle": f"{libelle_base} - CA global",
+            "Famille_Analytique": famille_analytique,
+            "Code_Analytique": "",
+            "Débit": total_facture_global,
+            "Crédit": 0.0
+        })
+
+        # CA par ISBN
+        for _, r in df.iterrows():
+            ecritures.append({
+                "Date": date_ecriture.strftime("%d/%m/%Y"),
+                "Journal": journal,
+                "Compte": compte_ca,
+                "Libelle": f"{libelle_base} - CA ISBN",
+                "Famille_Analytique": famille_analytique,
+                "Code_Analytique": r["ISBN"],
+                "Débit": 0.0,
+                "Crédit": round(float(r["Facture"]), 2)
+            })
+
+        # Commissions distribution
+        total_dist = df["Commission_distribution"].sum().round(2)
+        ecritures.append({
+            "Date": date_ecriture.strftime("%d/%m/%Y"),
+            "Journal": journal,
+            "Compte": compte_com_dist,
+            "Libelle": f"{libelle_base} - Com. distribution global",
+            "Famille_Analytique": famille_analytique,
+            "Code_Analytique": "",
+            "Débit": 0.0,
+            "Crédit": total_dist
+        })
+        for _, r in df.iterrows():
+            ecritures.append({
+                "Date": date_ecriture.strftime("%d/%m/%Y"),
+                "Journal": journal,
+                "Compte": compte_com_dist,
+                "Libelle": f"{libelle_base} - Com. distribution ISBN",
+                "Famille_Analytique": famille_analytique,
+                "Code_Analytique": r["ISBN"],
+                "Débit": round(float(r["Commission_distribution"]), 2),
+                "Crédit": 0.0
+            })
+
+        # Commissions diffusion
+        total_diff = df["Commission_diffusion"].sum().round(2)
+        ecritures.append({
+            "Date": date_ecriture.strftime("%d/%m/%Y"),
+            "Journal": journal,
+            "Compte": compte_com_diff,
+            "Libelle": f"{libelle_base} - Com. diffusion global",
+            "Famille_Analytique": famille_analytique,
+            "Code_Analytique": "",
+            "Débit": 0.0,
+            "Crédit": total_diff
+        })
+        for _, r in df.iterrows():
+            ecritures.append({
+                "Date": date_ecriture.strftime("%d/%m/%Y"),
+                "Journal": journal,
+                "Compte": compte_com_diff,
+                "Libelle": f"{libelle_base} - Com. diffusion ISBN",
+                "Famille_Analytique": famille_analytique,
+                "Code_Analytique": r["ISBN"],
+                "Débit": round(float(r["Commission_diffusion"]), 2),
+                "Crédit": 0.0
+            })
+
+        df_ecr = pd.DataFrame(ecritures)
+
+        # --- Vérification équilibre ---
+        total_debit = round(df_ecr["Débit"].sum(), 2)
+        total_credit = round(df_ecr["Crédit"].sum(), 2)
+
+        if total_debit != total_credit:
+            st.error(f"⚠️ Écriture déséquilibrée : Débit={total_debit}, Crédit={total_credit}")
+        else:
+            st.success("✅ Écritures équilibrées et prêtes à l’import Pennylane !")
+
+        # --- Export & téléchargement ---
+        buffer = BytesIO()
+        with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+            df_ecr.to_excel(writer, index=False, sheet_name="Ecritures")
+        buffer.seek(0)
+
+        st.download_button(
+            label="📥 Télécharger les écritures (Excel)",
+            data=buffer,
+            file_name="Ecritures_Pennylane.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        )
+
+        # Aperçu
+        st.subheader("👀 Aperçu des écritures générées")
+        st.dataframe(df_ecr)
+
 # =====================
 # MODULE 2 : IMPORT COMPTABLE
 # =====================
-st.header("📂 Importation des données comptables")
+elif menu == "Import données comptables":
+    st.header("📂 Importation des données comptables")
 
-mode_import = st.selectbox(
-    "Choisis ton mode d’extraction :",
-    [
-        "1️⃣ Fichier Excel (Pennylane Connect, Sage, etc.)",
-        "2️⃣ API directe (mode expert)",
-        "3️⃣ Synchronisation automatique (dossier partagé)"
-    ]
-)
+    mode_import = st.selectbox(
+        "Choisis ton mode d’extraction :",
+        [
+            "1️⃣ Fichier Excel (Pennylane Connect, Sage, etc.)",
+            "2️⃣ API directe (mode expert)",
+            "3️⃣ Synchronisation automatique (dossier partagé)"
+        ]
+    )
 
-if mode_import.startswith("1"):
-    st.info("🧩 Mode fichier Excel : télécharge tes exports depuis Pennylane Connect ou ton logiciel comptable.")
-    # (ici tu gardes le code d’import Excel standardisé vu précédemment)
+    if mode_import.startswith("1"):
+        st.info("🧩 Mode fichier Excel : télécharge tes exports depuis Pennylane Connect ou ton logiciel comptable.")
+        # code d’import Excel
 
-elif mode_import.startswith("2"):
-    st.info("🔗 Mode API : connexion directe à Pennylane, MyUnisoft, QuickBooks, etc.")
-    # (ici tu gardes le code d’import API multi-logiciels vu précédemment)
+    elif mode_import.startswith("2"):
+        st.info("🔗 Mode API : connexion directe à Pennylane, MyUnisoft, QuickBooks, etc.")
+        # code API
 
-elif mode_import.startswith("3"):
-    st.info("📁 Mode dossier synchronisé : l’application surveille un dossier partagé (OneDrive, Drive...)")
-    dossier_path = st.text_input("Chemin du dossier synchronisé :", placeholder="ex: C:/Users/EC/OneDrive/Pennylane_Connect")
-    
-    if st.button("Charger les fichiers du dossier"):
-        import glob, os
-        fichiers = glob.glob(os.path.join(dossier_path, "*.xlsx"))
-        if fichiers:
-            dfs = [pd.read_excel(f) for f in fichiers]
-            df_all = pd.concat(dfs, ignore_index=True)
-            st.success(f"{len(fichiers)} fichiers chargés automatiquement depuis {dossier_path}")
-            st.dataframe(df_all.head())
-        else:
-            st.warning("Aucun fichier trouvé dans le dossier indiqué.")
+    elif mode_import.startswith("3"):
+        st.info("📁 Mode dossier synchronisé : l’application surveille un dossier partagé (OneDrive, Drive...)")
+        dossier_path = st.text_input("Chemin du dossier synchronisé :", placeholder="ex: C:/Users/EC/OneDrive/Pennylane_Connect")
+
+        if st.button("Charger les fichiers du dossier"):
+            fichiers = glob.glob(os.path.join(dossier_path, "*.xlsx"))
+            if fichiers:
+                dfs = [pd.read_excel(f) for f in fichiers]
+                df_all = pd.concat(dfs, ignore_index=True)
+                st.success(f"{len(fichiers)} fichiers chargés automatiquement depuis {dossier_path}")
+                st.dataframe(df_all.head())
+            else:
+                st.warning("Aucun fichier trouvé dans le dossier indiqué.")
+
 # =====================
 # MODULE 3 : SOCLE PIVOT
 # =====================
