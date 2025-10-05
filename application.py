@@ -374,13 +374,9 @@ elif menu == "Tableaux & analyses":
             "Mini compte de résultat par ISBN"
         ])
 
-        # -------------------------
-        # Dashboard analytique
-        # -------------------------
         if sous_menu == "Dashboard analytique":
             st.subheader("📈 Top 10 ISBN par résultat net")
             
-            # Calcul résultat net par ISBN
             df_pivot["Résultat"] = df_pivot["Crédit"] - df_pivot["Débit"]
             top_isbn = df_pivot.groupby("Code_Analytique", as_index=False)["Résultat"].sum()
             top_isbn = top_isbn.sort_values(by="Résultat", ascending=False).head(10)
@@ -389,36 +385,28 @@ elif menu == "Tableaux & analyses":
                 st.warning("⚠️ Aucun résultat trouvé pour générer le dashboard.")
             else:
                 st.dataframe(top_isbn)
-
                 import plotly.express as px
                 fig = px.bar(top_isbn, x="Code_Analytique", y="Résultat",
                              title="Top 10 ISBN par résultat net",
                              labels={"Code_Analytique": "ISBN", "Résultat": "Résultat net"})
                 st.plotly_chart(fig, use_container_width=True)
 
-        # -------------------------
-        # Mini compte de résultat par ISBN
-        # -------------------------
         elif sous_menu == "Mini compte de résultat par ISBN":
             st.subheader("💼 Mini compte de résultat par ISBN")
 
-            # On reprend le socle pivot et on calcule CA, charges et résultat par ISBN
             df_cr = df_pivot.groupby("Code_Analytique", as_index=False).agg({
                 "Débit": "sum",
                 "Crédit": "sum"
             })
-
             df_cr["Résultat"] = df_cr["Crédit"] - df_cr["Débit"]
 
             st.dataframe(df_cr)
 
-            # Export Excel
             from io import BytesIO
             buffer = BytesIO()
             with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
                 df_cr.to_excel(writer, index=False, sheet_name="Mini_CR_ISBN")
             buffer.seek(0)
-
             st.download_button(
                 label="📥 Télécharger le mini compte de résultat par ISBN",
                 data=buffer,
