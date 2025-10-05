@@ -345,68 +345,75 @@ elif menu == "Socle pivot analytique":
 # =====================
 elif menu == "Tableaux & analyses":
     st.header("📊 Tableaux & analyses")
-    
-    sous_menu = st.selectbox("Choix de l'analyse", [
-        "Dashboard analytique",
-        "Trésorerie prévisionnelle",
-        "Seuil de rentabilité",
-        "Droits d’auteur",
-        "Contrôle TVA / Dépôt légal",
-        "Mini compte de résultat par ISBN"
-    ])
 
-    st.info(f"📌 Module {sous_menu} en cours de développement…")
+    if "df_pivot" not in st.session_state:
+        st.warning("⚠️ Générer d'abord le socle pivot depuis le module Import données comptables.")
+    else:
+        pivot = st.session_state["df_pivot"]
 
-    # ==== Mini compte de résultat par ISBN ====
-    if sous_menu == "Mini compte de résultat par ISBN":
-        st.subheader("💰 Mini Compte de Résultat par ISBN / Code Analytique")
-        
-        # On utilise le socle pivot généré précédemment
-        if "df_pivot" not in st.session_state:
-            st.warning("⚠️ Socle pivot non disponible. Générer d'abord depuis le module Import données comptables.")
-        else:
-            df = st.session_state["df_pivot"].copy()
+        sous_menu = st.selectbox("Choix de l'analyse", [
+            "Dashboard analytique",
+            "Mini compte de résultat par ISBN"
+        ])
 
-            # ==== Définir les comptes ====
-            comptes_ventes = st.text_area(
-                "Comptes Ventes (séparés par virgule)", value="70110000"
-            )
-            comptes_ventes = [c.strip() for c in comptes_ventes.split(",")]
+        # --------------------
+        # DASHBOARD ANALYTIQUE
+        # --------------------
+        if sous_menu == "Dashboard analytique":
+            st.subheader("📈 Dashboard analytique global")
 
-            comptes_charges = st.text_area(
-                "Comptes Charges (séparés par virgule)", value="62280000,62280001"
-            )
-            comptes_charges = [c.strip() for c in comptes_charges.split(",")]
+            # Totaux généraux
+            total_debit = pivot["Débit"].sum()
+            total_credit = pivot["Crédit"].sum()
+            st.metric("Total Débit", f"{total_debit:,.2f}")
+            st.metric("Total Crédit", f"{total_credit:,.2f}")
 
-            # ==== Bouton génération ====
-            if st.button("🛠️ Générer mini compte de résultat"):
-                # Somme Ventes par Code_Analytique
-                ventes = df[df["Compte"].isin(comptes_ventes)].groupby("Code_Analytique")["Crédit"].sum()
-                # Somme Charges par Code_Analytique
-                charges = df[df["Compte"].isin(comptes_charges)].groupby("Code_Analytique")["Débit"].sum()
+            # Totaux par compte
+            st.subheader("💰 Totaux par compte")
+            pivot_compte = pivot.groupby("Compte", as_index=False).agg({"Débit":"sum","Crédit":"sum"})
+            st.dataframe(pivot_compte)
 
-                # Fusionner ventes et charges
-                df_cr = pd.DataFrame({"Ventes": ventes, "Charges": charges}).fillna(0)
-                df_cr["Résultat"] = df_cr["Ventes"] - df_cr["Charges"]
-                df_cr = df_cr.reset_index()
+            # Totaux par famille analytique
+            st.subheader("🧩 Totaux par Famille Analytique")
+            pivot_famille = pivot.groupby("Famille_Analytique", as_index=False).agg({"Débit":"sum","Crédit":"sum"})
+            st.dataframe(pivot_famille)
 
-                # Résultat global
-                resultat_global = df_cr["Résultat"].sum()
-                st.metric("Résultat global période sélectionnée", f"{resultat_global:,.2f} €")
+        # ---------------------------------
+        # MINI COMPTE DE RÉSULTAT PAR ISBN
+        # ---------------------------------
+        elif sous_menu == "Mini compte de résultat par ISBN":
+            st.subheader("📚 Mini compte de résultat par ISBN")
 
-                # Tableau interactif
-                st.dataframe(df_cr.sort_values("Résultat", ascending=False))
+            # Vérification colonnes nécessaires
+            required_cols = ["Code_Analytique", "Compte", "Débit", "Crédit"]
+            if not all(col in pivot.columns for col in required_cols):
+                st.error(f"❌ Colonnes manquantes pour le mini compte de résultat : {required_cols}")
+            else:
+                # On filtre sur les comptes de charges et produits pour un mini CR
+                # Exemple : comptes commençant par 7 = produits, comptes 6 = charges
+                pivot_cr = pivot.copy()
+                pivot_cr["Produit"] = pivot_cr.apply(lambda x: x["Crédit"] if str(x["Compte"]).startswith("7") else 0, axis=1)
+                pivot_cr["Charge"] = pivot_cr.apply(lambda x: x["Débit"] if str(x["Compte"]).startswith("6") else 0, axis=1)
 
-                # Graphique barres
-                st.bar_chart(df_cr.set_index("Code_Analytique")["Résultat"])
+                mini_cr = pivot_cr.groupby("Code_Analytique", as_index=False).agg({
+                    "Produit": "sum",
+                    "Charge": "sum"
+                })
+                mini_cr["Résultat"] = mini_cr["Produit"] - mini_cr["Charge"]
+
+                st.dataframe(mini_cr)
 
                 # Export Excel
+                from io import BytesIO
                 buffer_cr = BytesIO()
                 with pd.ExcelWriter(buffer_cr, engine="openpyxl") as writer:
-                    df_cr.to_excel(writer, index=False, sheet_name="Mini_CR_ISBN")
+                    mini_cr.to_excel(writer, index=False, sheet_name="Mini_CR_ISBN")
                 buffer_cr.seek(0)
+
                 st.download_button(
                     label="📥 Télécharger le mini compte de résultat par ISBN",
                     data=buffer_cr,
                     file_name="Mini_CR_ISBN.xlsx",
                     mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+                )
+
