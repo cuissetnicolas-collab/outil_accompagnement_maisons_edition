@@ -239,7 +239,7 @@ if menu == "Générateur d'écritures BLDD":
 # =====================
 # MODULE 2 : IMPORT COMPTABLE
 # =====================
-lif menu == "Import données comptables":
+elif menu == "Import données comptables":
     st.header("📂 Importation des données comptables - Pennylane Connect")
 
     fichiers = st.file_uploader(
