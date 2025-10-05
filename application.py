@@ -210,22 +210,69 @@ if menu == "Générateur d'écritures BLDD":
 # =====================
 elif menu == "Import données comptables":
     st.header("📂 Importation des données comptables")
+
     mode_import = st.selectbox(
         "Choisis ton mode d’extraction :",
-        ["1️⃣ Pennylane Connect (fichier manuel)", "2️⃣ Dossier partagé", "3️⃣ API directe"]
+        [
+            "1️⃣ Pennylane Connect (fichier manuel)",
+            "2️⃣ Dossier partagé (Drive / OneDrive)",
+            "3️⃣ API directe (mode expert)"
+        ]
     )
+
     fichier_comptables = None
+
+    # --- Option 1 : Pennylane Connect ---
     if mode_import.startswith("1"):
+        st.info("🧩 Mode fichier Excel : télécharge ton export depuis Pennylane Connect")
         fichier_comptables = st.file_uploader("📂 Sélectionne ton fichier Excel Pennylane Connect", type=["xlsx"])
         if fichier_comptables is not None:
-            df = pd.read_excel(fichier_comptables, header=0)
-            st.session_state["df_comptables"] = df
-            st.success(f"✅ Fichier chargé : {df.shape[0]} lignes")
-            st.dataframe(df.head())
+            try:
+                df = pd.read_excel(fichier_comptables, header=0)
+                st.session_state["df_comptables"] = df
+                st.success(f"✅ Fichier chargé : {df.shape[0]} lignes")
+                st.dataframe(df.head())
+            except Exception as e:
+                st.error(f"❌ Impossible de lire le fichier : {e}")
 
+    # --- Option 2 : Dossier partagé ---
+    elif mode_import.startswith("2"):
+        st.info("📁 Mode dossier synchronisé : Streamlit accède automatiquement aux fichiers")
+        dossier_path = st.text_input("Chemin du dossier synchronisé :", placeholder="ex: C:/Users/EC/OneDrive/Pennylane_Connect")
+        
+        if st.button("Charger les fichiers du dossier"):
+            fichiers = glob.glob(os.path.join(dossier_path, "*.xlsx"))
+            if fichiers:
+                dfs = [pd.read_excel(f) for f in fichiers]
+                df_all = pd.concat(dfs, ignore_index=True)
+                st.session_state["df_comptables"] = df_all
+                st.success(f"{len(fichiers)} fichiers chargés automatiquement depuis {dossier_path}")
+                st.dataframe(df_all.head())
+            else:
+                st.warning("Aucun fichier trouvé dans le dossier indiqué.")
+
+    # --- Option 3 : API directe ---
+    elif mode_import.startswith("3"):
+        st.info("🔗 Mode API : connexion directe à Pennylane, MyUnisoft, QuickBooks, etc.")
+        st.subheader("⚙️ Paramètres API")
+        api_url = st.text_input("URL de l'API", placeholder="https://api.pennylane.com/...")
+        api_key = st.text_input("Clé API", type="password")
+        api_secret = st.text_input("Secret API", type="password")
+        compte_id = st.text_input("ID du compte / société", placeholder="Ex: 123456")
+
+        if st.button("Tester la connexion API"):
+            if api_url and api_key and api_secret:
+                st.success("✅ Connexion test OK (simulation pour l'instant)")
+            else:
+                st.error("❌ Merci de renseigner tous les champs pour tester la connexion")
+        st.info("⚠️ Module API en développement – les données ne sont pas encore importées automatiquement.")
+
+    # --- Bouton pour générer le socle pivot ---
     if "df_comptables" in st.session_state:
         if st.button("🛠️ Générer le socle pivot analytique"):
             df_compta = st.session_state["df_comptables"]
+
+            # Normaliser les noms de colonnes selon Pennylane Connect
             df_compta.rename(columns={
                 "Numéro de compte": "Compte",
                 "Débit": "Débit",
@@ -233,15 +280,31 @@ elif menu == "Import données comptables":
                 "Familles de catégories": "Famille_Analytique",
                 "Catégories": "Code_Analytique"
             }, inplace=True)
-            pivot = df_compta.groupby(["Compte","Famille_Analytique","Code_Analytique"], as_index=False).agg({"Débit":"sum","Crédit":"sum"})
+
+            # Remplir les lignes sans analytique
+            df_compta["Famille_Analytique"].fillna("NA", inplace=True)
+            df_compta["Code_Analytique"].fillna("", inplace=True)
+
+            # Génération du pivot analytique
+            pivot = df_compta.groupby(
+                ["Compte", "Famille_Analytique", "Code_Analytique"], as_index=False
+            ).agg({"Débit": "sum", "Crédit": "sum"})
+
             st.session_state["df_pivot"] = pivot
             st.success("✅ Socle pivot analytique généré !")
             st.dataframe(pivot.head(20))
+
+            # Export Excel
             buffer = BytesIO()
             with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
                 pivot.to_excel(writer, index=False, sheet_name="Socle_Pivot")
             buffer.seek(0)
-            st.download_button("📥 Télécharger le socle pivot analytique", data=buffer, file_name="Socle_Pivot_Analytique.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+            st.download_button(
+                label="📥 Télécharger le socle pivot analytique",
+                data=buffer,
+                file_name="Socle_Pivot_Analytique.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
 
 # =====================
 # MODULE 3 : SOCLE PIVOT
