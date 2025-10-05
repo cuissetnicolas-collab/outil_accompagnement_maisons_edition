@@ -264,7 +264,6 @@ elif menu == "Tableaux & analyses":
     else:
         df_pivot = st.session_state["df_pivot"]
         sous_menu = st.selectbox("Choix de l'analyse", ["Dashboard analytique","Mini compte de résultat par ISBN"])
-        if sous_menu=="Dashboard analytique
         if sous_menu == "Dashboard analytique":
             st.subheader("📈 Top 10 ISBN par résultat net")
             # Calcul du résultat net : Crédit - Débit
