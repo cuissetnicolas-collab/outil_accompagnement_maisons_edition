@@ -416,112 +416,109 @@ elif menu == "Tableaux & analyses":
             )
 
         # ----------------------------
-        # MODULE : TRÉSORERIE PRÉVISIONNELLE PAR ISBN
+# =====================
+# MODULE : TRÉSORERIE PRÉVISIONNELLE
 # =====================
 elif sous_menu == "Trésorerie prévisionnelle avancée":
-    st.header("💰 Trésorerie prévisionnelle avancée (ventes par ISBN)")
+    st.header("💰 Trésorerie prévisionnelle avancée")
 
-    # Vérification du socle pivot
     if "df_pivot" not in st.session_state:
         st.warning("⚠️ Le socle pivot analytique est requis. Merci de l’importer ou de le générer avant.")
         st.stop()
 
     df_pivot = st.session_state["df_pivot"].copy()
 
-    # --- Sélection de la période ---
-    st.markdown("### 🗓️ Période d'analyse")
-    date_debut = st.date_input("Date de début", pd.to_datetime("2025-01-01"))
-    date_fin = st.date_input("Date de fin", pd.to_datetime("2025-12-31"))
+    # --- Vérification colonne Date ---
+    if "Date" not in df_pivot.columns:
+        if "Date de l’événement du grand livre" in df_pivot.columns:
+            df_pivot.rename(columns={"Date de l’événement du grand livre": "Date"}, inplace=True)
+        else:
+            st.error("❌ Impossible de trouver la colonne Date dans le pivot.")
+            st.stop()
 
-    # --- Trésorerie de départ ---
-    comptes_tresorerie = ["512", "514", "53"]  # Banque, CCP, Caisse
-    df_tres = df_pivot[df_pivot["Compte"].astype(str).isin(comptes_tresorerie)].copy()
-    if df_tres.empty:
-        tresorerie_initiale = 0.0
-        st.warning("⚠️ Aucun compte de trésorerie détecté. Trésorerie initiale = 0 €")
-    else:
-        tresorerie_initiale = df_tres["Crédit"].sum() - df_tres["Débit"].sum()
-        st.info(f"💰 Solde initial calculé automatiquement depuis les comptes de trésorerie : {tresorerie_initiale:,.2f} €")
+    df_pivot["Date"] = pd.to_datetime(df_pivot["Date"], errors="coerce")
+    df_pivot = df_pivot.dropna(subset=["Date"])
 
-    # --- Paramètres ---
+    if df_pivot.empty:
+        st.warning("⚠️ Aucun mouvement valide avec date pour générer la trésorerie.")
+        st.stop()
+
+    # --- Solde de départ ---
+    comptes_treso = st.text_input("Numéros de compte trésorerie (séparés par ;)", value="512")
+    comptes_treso = [c.strip() for c in comptes_treso.split(";")]
+
+    solde_depart = df_pivot[df_pivot["Compte"].astype(str).isin(comptes_treso)]
+    solde_depart = solde_depart["Crédit"].sum() - solde_depart["Débit"].sum()
+    st.info(f"💵 Solde de trésorerie de départ calculé depuis les comptes sélectionnés : {solde_depart:,.2f} €")
+
+    # --- Paramètres de projection ---
     st.markdown("### 🔮 Paramètres de projection")
     horizon = st.slider("Horizon de projection (en mois)", 3, 24, 12)
-    croissance_ventes = st.number_input("Croissance mensuelle des ventes par ISBN (%)", value=2.0)
+    croissance_ca = st.number_input("Croissance mensuelle du CA (%)", value=2.0)
     evolution_charges = st.number_input("Évolution mensuelle des charges (%)", value=1.0)
 
-    # --- Choix ISBN ---
-    ventes_isbn = df_pivot[df_pivot["Compte"].astype(str).str.startswith("701")].copy()
-    liste_isbn = ventes_isbn["Code_Analytique"].unique()
-    isbn_selection = st.multiselect("Sélection des ISBN à inclure dans la projection", liste_isbn, default=liste_isbn)
+    # --- Choix comptes pour prévision (facultatif) ---
+    st.markdown("### 🔹 Filtre par type de comptes")
+    filtre_ventes = st.checkbox("Inclure uniquement les ventes (ex: comptes 7xx) dans la projection", value=True)
+    filtre_charges = st.checkbox("Inclure uniquement les charges (ex: comptes 6xx) dans la projection", value=True)
 
+    # --- Bouton de calcul ---
     if st.button("📊 Générer la prévision de trésorerie"):
         try:
-            # Filtrer uniquement les ISBN sélectionnés
-            df_isbn = ventes_isbn[ventes_isbn["Code_Analytique"].isin(isbn_selection)].copy()
-            df_isbn["Date"] = pd.to_datetime(df_isbn["Date"], errors="coerce")
-            df_isbn = df_isbn.dropna(subset=["Date"])
-            df_isbn["Mois"] = df_isbn["Date"].dt.to_period("M").astype(str)
+            df = df_pivot.copy()
 
-            # Flux mensuels par ventes
-            flux_ventes = df_isbn.groupby("Mois")["Crédit"].sum().reset_index()
-            flux_ventes = flux_ventes.sort_values("Mois")
-            flux_ventes.rename(columns={"Crédit": "Ventes_mensuelles"}, inplace=True)
+            # Filtrage comptes
+            mask = pd.Series(True, index=df.index)
+            if filtre_ventes:
+                mask &= df["Compte"].astype(str).str.startswith("7")
+            if filtre_charges:
+                mask &= df["Compte"].astype(str).str.startswith("6") | df["Compte"].astype(str).str.startswith("7")
+            df = df[mask]
 
-            # Flux mensuels charges (total Débit pivot)
-            df_charges = df_pivot[df_pivot["Compte"].astype(str).str.startswith(("6", "7"))==False].copy()
-            df_charges["Date"] = pd.to_datetime(df_charges["Date"], errors="coerce")
-            df_charges = df_charges.dropna(subset=["Date"])
-            df_charges["Mois"] = df_charges["Date"].dt.to_period("M").astype(str)
-            flux_charges = df_charges.groupby("Mois")["Débit"].sum().reset_index()
-            flux_charges = flux_charges.sort_values("Mois")
+            # Flux mensuels
+            df["Mois"] = df["Date"].dt.to_period("M").astype(str)
+            flux_mensuel = df.groupby("Mois").agg({"Débit": "sum", "Crédit": "sum"}).reset_index()
+            flux_mensuel["Solde_mensuel"] = flux_mensuel["Crédit"] - flux_mensuel["Débit"]
+            flux_mensuel = flux_mensuel.sort_values("Mois")
 
-            # Fusion flux
-            flux_mensuel = pd.merge(flux_ventes, flux_charges, on="Mois", how="outer").fillna(0)
-            flux_mensuel["Solde_mensuel"] = flux_mensuel["Ventes_mensuelles"] - flux_mensuel["Débit"]
-
-            # Prévisions pour mois futurs
+            # Prévisions futures
             dernier_mois = pd.Period(flux_mensuel["Mois"].max(), freq="M")
-            ca_actuel = flux_mensuel["Ventes_mensuelles"].iloc[-1]
+            ca_actuel = flux_mensuel["Crédit"].iloc[-1]
             charges_actuelles = flux_mensuel["Débit"].iloc[-1]
-            previsions = []
 
+            previsions = []
             for i in range(1, horizon + 1):
                 prochain_mois = (dernier_mois + i).strftime("%Y-%m")
-                ca_actuel *= (1 + croissance_ventes / 100)
+                ca_actuel *= (1 + croissance_ca / 100)
                 charges_actuelles *= (1 + evolution_charges / 100)
                 solde_prevu = ca_actuel - charges_actuelles
                 previsions.append({
                     "Mois": prochain_mois,
-                    "Ventes_mensuelles": ca_actuel,
                     "Débit": charges_actuelles,
+                    "Crédit": ca_actuel,
                     "Solde_mensuel": solde_prevu
                 })
 
             df_prev = pd.DataFrame(previsions)
             df_tresorerie = pd.concat([flux_mensuel, df_prev], ignore_index=True)
-            df_tresorerie["Trésorerie_cumulée"] = tresorerie_initiale + df_tresorerie["Solde_mensuel"].cumsum()
+            df_tresorerie["Trésorerie_cumulée"] = solde_depart + df_tresorerie["Solde_mensuel"].cumsum()
 
-            # Résumé
+            # Affichage résumé
             solde_final = df_tresorerie["Trésorerie_cumulée"].iloc[-1]
-            variation = solde_final - tresorerie_initiale
-            st.success(f"✅ Simulation terminée — Solde final prévisionnel : **{solde_final:,.2f} €** ({variation:+.2f} € vs départ)")
+            variation = solde_final - solde_depart
+            st.success(f"✅ Solde final prévisionnel : **{solde_final:,.2f} €** ({variation:+.2f} € vs départ)")
 
             # Graphique
-            fig = px.line(
-                df_tresorerie,
-                x="Mois",
-                y="Trésorerie_cumulée",
-                title="📈 Évolution prévisionnelle de la trésorerie par ISBN",
-                markers=True
-            )
+            fig = px.line(df_tresorerie, x="Mois", y="Trésorerie_cumulée",
+                          title="📈 Évolution prévisionnelle de la trésorerie", markers=True)
             fig.update_layout(xaxis_title="Mois", yaxis_title="Trésorerie (€)")
             st.plotly_chart(fig, use_container_width=True)
 
-            # Tableau détaillé
+            # Tableau complet
             st.subheader("📋 Détail de la prévision mensuelle")
             st.dataframe(df_tresorerie.style.format({
-                "Ventes_mensuelles": "{:,.0f}",
                 "Débit": "{:,.0f}",
+                "Crédit": "{:,.0f}",
                 "Solde_mensuel": "{:,.0f}",
                 "Trésorerie_cumulée": "{:,.0f}"
             }))
@@ -529,14 +526,11 @@ elif sous_menu == "Trésorerie prévisionnelle avancée":
             # Export Excel
             buffer_tres = BytesIO()
             with pd.ExcelWriter(buffer_tres, engine="openpyxl") as writer:
-                df_tresorerie.to_excel(writer, index=False, sheet_name="Prévision_Trésorerie_ISBN")
+                df_tresorerie.to_excel(writer, index=False, sheet_name="Prévision_Trésorerie")
             buffer_tres.seek(0)
             st.download_button(
                 label="📥 Télécharger la prévision (Excel)",
                 data=buffer_tres,
-                file_name="Prevision_Tresorerie_ISBN.xlsx",
+                file_name="Prevision_Tresorerie.xlsx",
                 mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
             )
-
-        except Exception as e:
-            st.error(f"❌ Erreur pendant la simulation : {e}")
