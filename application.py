@@ -113,15 +113,39 @@ elif menu == "Import données comptables":
                 st.error(f"❌ Erreur lors de la génération du pivot : {e}")
 
 # =====================
-# MODULE 3 : SOCLE PIVOT
+# SOCLE PIVOT ANALYTIQUE (modifié)
 # =====================
-elif menu == "Socle pivot analytique":
-    st.header("🏗️ Socle pivot analytique")
-    if "df_pivot" in st.session_state:
-        st.success("✅ Socle pivot disponible")
-        st.dataframe(st.session_state["df_pivot"].head(20))
-    else:
-        st.warning("⚠️ Générer d'abord le socle pivot depuis le module Import données comptables.")
+if menu == "Import données comptables" and "df_comptables" in st.session_state:
+    if st.button("🛠️ Générer le socle pivot analytique (complet)"):
+        df_compta = st.session_state["df_comptables"]
+
+        # S'assurer que toutes les colonnes nécessaires existent
+        for col in ["Numéro de compte", "Débit", "Crédit", "Familles de catégories", "Catégories", "Date"]:
+            if col not in df_compta.columns:
+                df_compta[col] = np.nan
+
+        # Renommer colonnes pour cohérence
+        df_compta.rename(columns={
+            "Numéro de compte": "Compte",
+            "Débit": "Débit",
+            "Crédit": "Crédit",
+            "Familles de catégories": "Famille_Analytique",
+            "Catégories": "Code_Analytique",
+            "Date": "Date"
+        }, inplace=True)
+
+        # Remplacer les valeurs manquantes analytique par ""
+        df_compta["Famille_Analytique"] = df_compta["Famille_Analytique"].fillna("")
+        df_compta["Code_Analytique"] = df_compta["Code_Analytique"].fillna("")
+
+        # Pivot complet
+        pivot = df_compta.groupby(
+            ["Compte", "Famille_Analytique", "Code_Analytique", "Date"], as_index=False
+        ).agg({"Débit": "sum", "Crédit": "sum"})
+
+        st.session_state["df_pivot"] = pivot
+        st.success("✅ Socle pivot complet généré !")
+        st.dataframe(pivot.head(20))
 
 # =====================
 # MODULE 4 : TABLEAUX & ANALYSES
