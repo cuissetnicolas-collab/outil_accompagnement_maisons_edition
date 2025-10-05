@@ -70,12 +70,12 @@ if menu == "Générateur d'écritures BLDD":
     com_distribution_total = st.number_input("Montant total commissions distribution", value=1000.00, format="%.2f")
     com_diffusion_total = st.number_input("Montant total commissions diffusion", value=500.00, format="%.2f")
 
-    # --- NOUVEAU : sélection de la famille analytique ---
+    # --- Sélection de la famille analytique ---
     st.markdown("---")
     st.subheader("🧭 Famille analytique")
     famille_analytique = st.text_input(
         "Nom de la famille analytique (obligatoire pour import Pennylane)",
-        value="ISBN"  # valeur par défaut
+        value="ISBN"
     )
     st.caption("Exemples : ISBN / Collection / Client / Projet / Auteur")
 
@@ -84,10 +84,15 @@ if menu == "Générateur d'écritures BLDD":
 
     # --- Import fichier BLDD ---
     st.markdown("---")
-    fichier_entree = st.file_uploader("📂 Importer le fichier Excel BLDD", type=["xlsx"])
+    fichier_entree = st.file_uploader("📂 Importer le fichier Excel BLDD", type=["xls", "xlsx"])
 
     if fichier_entree is not None:
-        df = pd.read_excel(fichier_entree, header=9, dtype={"ISBN": str})
+        try:
+            df = pd.read_excel(fichier_entree, header=9, dtype={"ISBN": str})
+        except Exception as e:
+            st.error(f"❌ Impossible de lire le fichier Excel : {e}")
+            st.stop()
+
         df.columns = df.columns.str.strip()
         df = df.dropna(subset=["ISBN"]).copy()
         df["ISBN"] = (
@@ -127,7 +132,7 @@ if menu == "Générateur d'écritures BLDD":
             "Compte": compte_ca,
             "Libelle": f"{libelle_base} - CA global",
             "Famille_Analytique": famille_analytique,
-            "Code_Analytique": "",  # laissé vide pour global
+            "Code_Analytique": "",
             "Débit": 0.0,
             "Crédit": total_facture_global
         })
@@ -140,7 +145,7 @@ if menu == "Générateur d'écritures BLDD":
                 "Compte": compte_ca,
                 "Libelle": f"{libelle_base} - CA {r['ISBN']}",
                 "Famille_Analytique": famille_analytique,
-                "Code_Analytique": r["ISBN"],  # clé analytique individuelle
+                "Code_Analytique": r["ISBN"],
                 "Débit": 0.0,
                 "Crédit": round(float(r["Facture"]), 2)
             })
