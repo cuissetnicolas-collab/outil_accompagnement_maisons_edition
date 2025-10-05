@@ -190,168 +190,39 @@ if menu == "Générateur d'écritures BLDD":
 # =====================
 # MODULE 2 : IMPORT COMPTABLE
 # =====================
-elif menu == "Import données comptables":
-    st.header("📂 Import des données comptables")
+st.header("📂 Importation des données comptables")
 
-    # Sélection du mode
-    choix = st.radio(
-        "Source des données :",
-        ["Pennylane Connect (Excel)", "Connexion API (multi-logiciels)"]
-    )
+mode_import = st.selectbox(
+    "Choisis ton mode d’extraction :",
+    [
+        "1️⃣ Fichier Excel (Pennylane Connect, Sage, etc.)",
+        "2️⃣ API directe (mode expert)",
+        "3️⃣ Synchronisation automatique (dossier partagé)"
+    ]
+)
 
-    # ================================================================
-    # MODE 1 : Import Excel (Pennylane Connect)
-    # ================================================================
-    if choix == "Pennylane Connect (Excel)":
-        st.info("💡 Importe ici les fichiers Excel exportés depuis Pennylane Connect (GL, Journaux, Balance...)")
+if mode_import.startswith("1"):
+    st.info("🧩 Mode fichier Excel : télécharge tes exports depuis Pennylane Connect ou ton logiciel comptable.")
+    # (ici tu gardes le code d’import Excel standardisé vu précédemment)
 
-        fichiers = st.file_uploader(
-            "Importer un ou plusieurs fichiers Excel (.xlsx)",
-            type=["xlsx"],
-            accept_multiple_files=True
-        )
+elif mode_import.startswith("2"):
+    st.info("🔗 Mode API : connexion directe à Pennylane, MyUnisoft, QuickBooks, etc.")
+    # (ici tu gardes le code d’import API multi-logiciels vu précédemment)
 
+elif mode_import.startswith("3"):
+    st.info("📁 Mode dossier synchronisé : l’application surveille un dossier partagé (OneDrive, Drive...)")
+    dossier_path = st.text_input("Chemin du dossier synchronisé :", placeholder="ex: C:/Users/EC/OneDrive/Pennylane_Connect")
+    
+    if st.button("Charger les fichiers du dossier"):
+        import glob, os
+        fichiers = glob.glob(os.path.join(dossier_path, "*.xlsx"))
         if fichiers:
-            dfs = []
-            for fichier in fichiers:
-                try:
-                    df = pd.read_excel(fichier, dtype=str)
-                    df.columns = df.columns.str.strip().str.lower()
-
-                    # Détection du type
-                    nom = fichier.name.lower()
-                    if "grand" in nom or "gl" in nom:
-                        type_fichier = "Grand livre"
-                    elif "balance" in nom:
-                        type_fichier = "Balance"
-                    elif "journal" in nom:
-                        type_fichier = "Journaux"
-                    else:
-                        type_fichier = "Inconnu"
-
-                    # Normalisation colonnes
-                    mapping = {
-                        "date": "Date",
-                        "journal": "Journal",
-                        "compte": "Compte",
-                        "libellé": "Libelle",
-                        "libelle": "Libelle",
-                        "debit": "Debit",
-                        "crédit": "Credit",
-                        "credit": "Credit"
-                    }
-                    df = df.rename(columns={c: mapping.get(c, c) for c in df.columns})
-
-                    for col in ["Date", "Journal", "Compte", "Libelle", "Debit", "Credit"]:
-                        if col not in df.columns:
-                            df[col] = None
-
-                    df["Debit"] = pd.to_numeric(df["Debit"], errors="coerce").fillna(0)
-                    df["Credit"] = pd.to_numeric(df["Credit"], errors="coerce").fillna(0)
-                    df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
-                    df["Source"] = type_fichier
-                    dfs.append(df[["Date", "Journal", "Compte", "Libelle", "Debit", "Credit", "Source"]])
-                    st.success(f"✅ {fichier.name} importé ({type_fichier}) — {len(df)} lignes")
-
-                except Exception as e:
-                    st.error(f"Erreur lecture {fichier.name} : {e}")
-
-            if dfs:
-                df_final = pd.concat(dfs, ignore_index=True)
-                st.dataframe(df_final.head(10))
-                st.info(f"Équilibre global : Débit = {df_final['Debit'].sum():,.2f} / Crédit = {df_final['Credit'].sum():,.2f}")
-
-                buffer = BytesIO()
-                with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
-                    df_final.to_excel(writer, index=False, sheet_name="Comptabilite_fusionnee")
-                buffer.seek(0)
-                st.download_button(
-                    label="📥 Télécharger les données standardisées",
-                    data=buffer,
-                    file_name="Compta_Fusionnee.xlsx",
-                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-                )
-
-    # ================================================================
-    # MODE 2 : Connexion API générique
-    # ================================================================
-    elif choix == "Connexion API (multi-logiciels)":
-        st.info("🔗 Mode expert : connecte-toi à l'API d’un logiciel comptable (Pennylane, Sage, MyUnisoft, Tiime, etc.)")
-
-        logiciel = st.selectbox("Choisir le logiciel :", ["Pennylane", "MyUnisoft", "Sage", "QuickBooks", "Autre"])
-
-        api_key = st.text_input("🔐 Clé API ou Token d’accès", type="password")
-        url_base = st.text_input("🌐 URL de l’API (endpoint base)", placeholder="https://api.logiciel.com/v1/")
-
-        start_date = st.date_input("📆 Date de début")
-        end_date = st.date_input("📆 Date de fin")
-
-        if st.button("Importer via API"):
-            if not api_key or not url_base:
-                st.warning("Merci de renseigner la clé API et l’URL de l’API.")
-            else:
-                # Simulation (à adapter par logiciel)
-                st.info(f"Connexion simulée à l’API {logiciel}")
-
-                df_demo = pd.DataFrame({
-                    "Date": pd.date_range(start=start_date, end=end_date, freq="M"),
-                    "Journal": ["VT"]*3,
-                    "Compte": ["701000", "707000", "622000"],
-                    "Libelle": ["Ventes Livres", "Ventes Services", "Commissions"],
-                    "Debit": [0, 0, 1500],
-                    "Credit": [12000, 2000, 0],
-                    "Source": f"API {logiciel}"
-                })
-
-                st.success(f"✅ Données simulées récupérées depuis {logiciel}")
-                st.dataframe(df_demo)
-
-                st.download_button(
-                    label=f"📥 Télécharger données API {logiciel}",
-                    data=df_demo.to_csv(index=False).encode("utf-8"),
-                    file_name=f"{logiciel}_API_Demo.csv",
-                    mime="text/csv"
-                )
-
-    # ================================================================
-    # 🟩 MODE 2 : API Pennylane (option avancée)
-    # ================================================================
-    elif choix == "API Pennylane (option avancée)":
-        st.info("""
-        🔗 Ce mode permet d'accéder directement aux écritures comptables via l'API Pennylane.
-        Il nécessite une clé API et des droits d'accès spécifiques (mode expert).
-        """)
-
-        api_key = st.text_input("🔐 Clé API Pennylane", type="password")
-        start_date = st.date_input("📆 Date de début")
-        end_date = st.date_input("📆 Date de fin")
-
-        if st.button("Importer via API Pennylane"):
-            if not api_key:
-                st.warning("Merci de renseigner la clé API Pennylane.")
-            else:
-                # Exemple simulé pour mémoire (à remplacer si l'API est accessible)
-                st.info("Connexion simulée à l’API Pennylane (mode démo).")
-
-                df_demo = pd.DataFrame({
-                    "Date": pd.date_range(start=start_date, end=end_date, freq="M"),
-                    "Journal": ["VT", "VT", "VT"],
-                    "Compte": ["701100", "707000", "706000"],
-                    "Libelle": ["Ventes livres", "Ventes numériques", "Prestation conseil"],
-                    "Debit": [0, 0, 0],
-                    "Credit": [12500, 1800, 4500],
-                    "Source": "API Pennylane"
-                })
-                st.success("✅ Données simulées récupérées via API")
-                st.dataframe(df_demo)
-
-                st.download_button(
-                    "📥 Télécharger données API simulées",
-                    data=df_demo.to_csv(index=False).encode("utf-8"),
-                    file_name="Pennylane_API_Demo.csv",
-                    mime="text/csv"
-                )
-
+            dfs = [pd.read_excel(f) for f in fichiers]
+            df_all = pd.concat(dfs, ignore_index=True)
+            st.success(f"{len(fichiers)} fichiers chargés automatiquement depuis {dossier_path}")
+            st.dataframe(df_all.head())
+        else:
+            st.warning("Aucun fichier trouvé dans le dossier indiqué.")
 # =====================
 # MODULE 3 : SOCLE PIVOT
 # =====================
