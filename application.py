@@ -336,22 +336,22 @@ elif menu == "Tableaux & analyses":
             )
 
         # ----------------------------
-        # Trésorerie prévisionnelle
-# ----------------------------
-elif sous_menu == "Trésorerie prévisionnelle":
+        elif sous_menu == "Trésorerie prévisionnelle":
     st.header("💰 Trésorerie prévisionnelle")
 
     # Sélection de la date de départ
     date_debut = st.date_input("Date de départ de la trésorerie", pd.to_datetime("2025-04-01"))
 
-    # Assurer les bons types
-    df_pivot["Compte"] = df_pivot["Compte"].astype(str)
+    # Assurer les bons types et nettoyer les colonnes
+    df_pivot["Compte"] = df_pivot["Compte"].astype(str).str.strip()
     df_pivot["Date"] = pd.to_datetime(df_pivot["Date"], errors="coerce")
+    df_pivot["Débit"] = pd.to_numeric(df_pivot["Débit"], errors="coerce").fillna(0)
+    df_pivot["Crédit"] = pd.to_numeric(df_pivot["Crédit"], errors="coerce").fillna(0)
 
     # Comptes bancaires
     comptes_bancaires = df_pivot[df_pivot["Compte"].str.startswith("5")]
     solde_depart_df = comptes_bancaires[comptes_bancaires["Date"] <= pd.to_datetime(date_debut)]
-    solde_depart_total = (solde_depart_df["Crédit"].sum() - solde_depart_df["Débit"].sum()) if not solde_depart_df.empty else 0.0
+    solde_depart_total = solde_depart_df["Crédit"].sum() - solde_depart_df["Débit"].sum()
     st.info(f"Solde de départ calculé automatiquement : {solde_depart_total:,.2f} €")
 
     # Paramètres prévisionnels
@@ -361,7 +361,7 @@ elif sous_menu == "Trésorerie prévisionnelle":
 
     if st.button("📊 Générer la prévision de trésorerie"):
         try:
-            # Flux mensuels sur comptes de résultat (hors comptes bancaires)
+            # Flux mensuels hors comptes bancaires
             df_flux = df_pivot[~df_pivot["Compte"].str.startswith("5")].copy()
             df_flux = df_flux.dropna(subset=["Date"])
             df_flux["Mois"] = df_flux["Date"].dt.to_period("M").astype(str)
