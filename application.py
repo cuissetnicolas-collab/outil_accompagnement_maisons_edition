@@ -353,14 +353,15 @@ elif menu == "Tableaux & analyses":
             solde_depart_total = solde_depart_df["Crédit"].sum() - solde_depart_df["Débit"].sum()
             st.info(f"Solde de départ : {solde_depart_total:,.2f} €")
 
-            # Paramètres par défaut pour prévision
-            horizon = 12               # 12 mois
-            croissance_ca = 0.02       # 2% par mois
-            evolution_charges = 0.01   # 1% par mois
+            # Paramètres pour prévision
+            horizon = st.slider("Horizon de projection (en mois)", 3, 24, 12)
+            croissance_ca = st.number_input("Croissance mensuelle du CA (%)", value=2.0) / 100
+            evolution_charges = st.number_input("Évolution mensuelle des charges (%)", value=1.0) / 100
 
             # Flux hors comptes bancaires
             df_flux = df_pivot[~df_pivot["Compte"].str.startswith("5")].copy()
             df_flux = df_flux.dropna(subset=["Date"])
+            df_flux = df_flux[df_flux["Date"] >= pd.to_datetime(date_debut)]  # Seulement flux après date départ
             df_flux["Mois"] = df_flux["Date"].dt.to_period("M").astype(str)
 
             flux_mensuel = df_flux.groupby("Mois").agg({"Débit": "sum", "Crédit": "sum"}).reset_index()
