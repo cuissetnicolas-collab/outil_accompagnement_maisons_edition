@@ -341,7 +341,7 @@ elif menu == "Tableaux & analyses":
     # Date de départ
     date_debut = st.date_input("Date de départ de la trésorerie", pd.to_datetime("2025-04-01"))
 
-    # Nettoyage et types
+    # Nettoyage et conversion des types
     df_pivot["Compte"] = df_pivot["Compte"].astype(str).str.strip()
     df_pivot["Date"] = pd.to_datetime(df_pivot["Date"], errors="coerce")
     df_pivot["Débit"] = pd.to_numeric(df_pivot["Débit"], errors="coerce").fillna(0)
