@@ -337,8 +337,8 @@ elif menu == "Tableaux & analyses":
 
         # ----------------------------
         # Trésorerie prévisionnelle
-        # ----------------------------
-       elif sous_menu == "Trésorerie prévisionnelle":
+# ----------------------------
+elif sous_menu == "Trésorerie prévisionnelle":
     st.header("💰 Trésorerie prévisionnelle")
 
     # Sélection de la date de départ
