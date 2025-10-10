@@ -232,16 +232,27 @@ elif page == "RETURNS EDITION":
         
         df = st.session_state["df_pivot"].copy()
         df["Libelle"] = df.get("Libelle", df["Compte"].astype(str))
-        df["Compte"] = df["Compte"].astype(str)  # Conversion pour éviter les erreurs
         
-        # --- DEBUG : vérifier les comptes disponibles ---
-        st.subheader("📋 Comptes disponibles dans les données")
-        st.write(sorted(df["Compte"].unique()))
+        # --- Fonction pour filtrer selon une plage de comptes ---
+        def filtre_plages(df, plages):
+            mask_total = pd.Series(False, index=df.index)
+            for plage in plages:
+                try:
+                    # Extraire bornes
+                    start, end = map(int, plage.replace("[","").replace("]","").replace(" ","").split("-"))
+                    # Extraire start et end des comptes du pivot
+                    match = df["Compte"].str.extract(r"\[(\d+)-(\d+)\]")
+                    match = match.fillna(0).astype(int)
+                    mask = (match[0] >= start) & (match[1] <= end)
+                    mask_total |= mask
+                except Exception as e:
+                    st.warning(f"Impossible de traiter la plage {plage} : {e}")
+            return mask_total
         
         # --- Masques de filtrage ---
-        mask_ventes = df["Compte"].str.startswith(tuple(comptes_ventes)) if comptes_ventes else pd.Series(False, index=df.index)
-        mask_retours = df["Compte"].str.startswith(tuple(comptes_retours)) if comptes_retours else pd.Series(False, index=df.index)
-        mask_remises = df["Compte"].str.startswith(tuple(comptes_remises)) if comptes_remises else pd.Series(False, index=df.index)
+        mask_ventes = filtre_plages(df, comptes_ventes) if comptes_ventes else pd.Series(False, index=df.index)
+        mask_retours = filtre_plages(df, comptes_retours) if comptes_retours else pd.Series(False, index=df.index)
+        mask_remises = filtre_plages(df, comptes_remises) if comptes_remises else pd.Series(False, index=df.index)
         
         # --- DEBUG : afficher les lignes détectées ---
         st.subheader("🔍 Lignes détectées pour les retours")
@@ -271,7 +282,7 @@ elif page == "RETURNS EDITION":
             st.subheader("Top retours par ISBN")
             st.dataframe(top_retours)
         else:
-            st.info("Aucun compte de retours détecté. Vérifiez vos codes dans SOCLE EDITION.")
+            st.info("Aucun compte de retours détecté. Vérifiez vos plages de comptes dans SOCLE EDITION.")
 
 # =====================
 # CASH EDITION
