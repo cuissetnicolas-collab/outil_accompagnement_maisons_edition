@@ -232,15 +232,16 @@ elif page == "RETURNS EDITION":
         
         df = st.session_state["df_pivot"].copy()
         df["Libelle"] = df.get("Libelle", df["Compte"].astype(str))
+        df["Compte"] = df["Compte"].astype(str)  # Conversion pour éviter les erreurs
         
         # --- DEBUG : vérifier les comptes disponibles ---
         st.subheader("📋 Comptes disponibles dans les données")
         st.write(sorted(df["Compte"].unique()))
         
         # --- Masques de filtrage ---
-        mask_ventes = df["Compte"].astype(str).str.startswith(tuple(comptes_ventes)) if comptes_ventes else pd.Series(False, index=df.index)
-        mask_retours = df["Compte"].astype(str).str.startswith(tuple(comptes_retours)) if comptes_retours else pd.Series(False, index=df.index)
-        mask_remises = df["Compte"].astype(str).str.startswith(tuple(comptes_remises)) if comptes_remises else pd.Series(False, index=df.index)
+        mask_ventes = df["Compte"].str.startswith(tuple(comptes_ventes)) if comptes_ventes else pd.Series(False, index=df.index)
+        mask_retours = df["Compte"].str.startswith(tuple(comptes_retours)) if comptes_retours else pd.Series(False, index=df.index)
+        mask_remises = df["Compte"].str.startswith(tuple(comptes_remises)) if comptes_remises else pd.Series(False, index=df.index)
         
         # --- DEBUG : afficher les lignes détectées ---
         st.subheader("🔍 Lignes détectées pour les retours")
