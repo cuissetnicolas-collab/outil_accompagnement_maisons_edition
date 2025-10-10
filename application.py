@@ -227,34 +227,25 @@ elif page == "RETURNS EDITION":
         df["Libelle"] = df.get("Libelle", df["Compte"])
         
         # --- Normalisation des comptes ---
-        # Convertit float -> int -> str et supprime les espaces
+        # Convert float -> int -> str pour éviter les problèmes
         df["Compte"] = df["Compte"].fillna(0).astype(int).astype(str).str.strip()
         
-        st.subheader("📋 Comptes disponibles dans les données")
-        st.write(sorted(df["Compte"].unique()))
+        # --- Comptes utilisés ---
+        comptes_ventes = ["701"]          # adapte selon tes comptes de ventes
+        compte_retours = "709000000"      # compte de retours
+        compte_remises = "709100000"      # compte de remises
         
-        # --- Comptes exacts ---
-        comptes_ventes = ["701"]  # adapter selon tes comptes de ventes
-        compte_retours = "709000000"
-        compte_remises = "709100000"
-        
-        # --- Masques ---
+        # --- Masques pour filtrer les comptes ---
         mask_ventes = df["Compte"].str.startswith(tuple(comptes_ventes))
         mask_retours = df["Compte"] == compte_retours
         mask_remises = df["Compte"] == compte_remises
         
-        # --- Debug : lignes détectées ---
-        st.subheader("📋 Lignes détectées pour les retours")
-        st.write(df.loc[mask_retours, ["Compte", "Débit", "Crédit", "Code_Analytique"]])
+        # --- Calcul du solde (Crédit - Débit) ---
+        ca_brut = (df.loc[mask_ventes, "Crédit"].sum() - df.loc[mask_ventes, "Débit"].sum())
+        total_retours = (df.loc[mask_retours, "Crédit"].sum() - df.loc[mask_retours, "Débit"].sum())
+        remises = (df.loc[mask_remises, "Crédit"].sum() - df.loc[mask_remises, "Débit"].sum())
         
-        st.subheader("📋 Lignes détectées pour les remises")
-        st.write(df.loc[mask_remises, ["Compte", "Débit", "Crédit", "Code_Analytique"]])
-        
-        # --- Calcul indicateurs ---
-        ca_brut = df.loc[mask_ventes, "Crédit"].sum() - df.loc[mask_ventes, "Débit"].sum()
-        total_retours = df.loc[mask_retours, "Crédit"].sum() - df.loc[mask_retours, "Débit"].sum()
-        remises = df.loc[mask_remises, "Crédit"].sum() - df.loc[mask_remises, "Débit"].sum()
-        
+        # --- Affichage des indicateurs ---
         st.metric("💰 CA Brut", f"{ca_brut:,.0f} €")
         st.metric("📦 Retours", f"{total_retours:,.0f} €")
         st.metric("🏷️ Remises libraires", f"{remises:,.0f} €")
