@@ -223,46 +223,25 @@ elif page == "RETURNS EDITION":
     if "df_pivot" not in st.session_state:
         st.warning("⚠️ Générer d'abord le SOCLE EDITION.")
     else:
-        param = st.session_state.get("param_comptes", {})
-        st.info("⚠️ Assurez-vous que les comptes de ventes, retours et remises sont paramétrés dans SOCLE EDITION.")
-        
-        comptes_ventes = param.get("ventes", [])
-        comptes_retours = param.get("retours", [])
-        comptes_remises = param.get("remises", [])
-        
         df = st.session_state["df_pivot"].copy()
         df["Libelle"] = df.get("Libelle", df["Compte"].astype(str))
-        df["Compte"] = df["Compte"].astype(str)  # Conversion pour éviter les erreurs
+        df["Compte"] = df["Compte"].astype(str)  # sécurise tous les filtres
         
-        # --- Fonction pour filtrer selon une plage ou un compte simple ---
-        def filtre_plages(df, plages):
-            mask_total = pd.Series(False, index=df.index)
-            for plage in plages:
-                try:
-                    if "-" in plage:
-                        # Plage de type start-end
-                        start, end = map(int, plage.replace("[","").replace("]","").replace(" ","").split("-"))
-                        match = df["Compte"].str.extract(r"\[(\d+)-(\d+)\]")
-                        match = match.fillna(0).astype(int)
-                        mask = (match[0] >= start) & (match[1] <= end)
-                    else:
-                        # Compte unique
-                        mask = df["Compte"] == str(plage)
-                    mask_total |= mask
-                except Exception as e:
-                    st.warning(f"Impossible de traiter la plage/compte {plage} : {e}")
-            return mask_total
+        # --- Comptes exacts ---
+        comptes_ventes = ["701"]  # adapte selon tes ventes
+        compte_retours = "709000000"
+        compte_remises = "709100000"
         
-        # --- Masques de filtrage ---
-        mask_ventes = filtre_plages(df, comptes_ventes) if comptes_ventes else pd.Series(False, index=df.index)
-        mask_retours = filtre_plages(df, comptes_retours) if comptes_retours else pd.Series(False, index=df.index)
-        mask_remises = filtre_plages(df, comptes_remises) if comptes_remises else pd.Series(False, index=df.index)
+        # --- Masques ---
+        mask_ventes = df["Compte"].str.startswith(tuple(comptes_ventes))
+        mask_retours = df["Compte"] == compte_retours
+        mask_remises = df["Compte"] == compte_remises
         
-        # --- DEBUG : afficher les lignes détectées ---
-        st.subheader("🔍 Lignes détectées pour les retours")
+        # --- DEBUG : lignes détectées ---
+        st.subheader("📋 Lignes détectées pour les retours")
         st.write(df.loc[mask_retours, ["Compte", "Débit", "Crédit", "Code_Analytique"]])
         
-        st.subheader("🔍 Lignes détectées pour les remises")
+        st.subheader("📋 Lignes détectées pour les remises")
         st.write(df.loc[mask_remises, ["Compte", "Débit", "Crédit", "Code_Analytique"]])
         
         # --- Calcul indicateurs ---
@@ -286,7 +265,7 @@ elif page == "RETURNS EDITION":
             st.subheader("Top retours par ISBN")
             st.dataframe(top_retours)
         else:
-            st.info("Aucun compte de retours détecté. Vérifiez vos comptes/plages dans SOCLE EDITION.")
+            st.info("Aucun retour détecté pour le compte 709000000.")
 
 # =====================
 # CASH EDITION
