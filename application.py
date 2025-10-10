@@ -224,11 +224,17 @@ elif page == "RETURNS EDITION":
         st.warning("⚠️ Générer d'abord le SOCLE EDITION.")
     else:
         df = st.session_state["df_pivot"].copy()
-        df["Libelle"] = df.get("Libelle", df["Compte"].astype(str))
-        df["Compte"] = df["Compte"].astype(str)  # sécurise tous les filtres
+        df["Libelle"] = df.get("Libelle", df["Compte"])
+        
+        # --- Normalisation des comptes ---
+        # Convertit float -> int -> str et supprime les espaces
+        df["Compte"] = df["Compte"].fillna(0).astype(int).astype(str).str.strip()
+        
+        st.subheader("📋 Comptes disponibles dans les données")
+        st.write(sorted(df["Compte"].unique()))
         
         # --- Comptes exacts ---
-        comptes_ventes = ["701"]  # adapte selon tes ventes
+        comptes_ventes = ["701"]  # adapter selon tes comptes de ventes
         compte_retours = "709000000"
         compte_remises = "709100000"
         
@@ -237,7 +243,7 @@ elif page == "RETURNS EDITION":
         mask_retours = df["Compte"] == compte_retours
         mask_remises = df["Compte"] == compte_remises
         
-        # --- DEBUG : lignes détectées ---
+        # --- Debug : lignes détectées ---
         st.subheader("📋 Lignes détectées pour les retours")
         st.write(df.loc[mask_retours, ["Compte", "Débit", "Crédit", "Code_Analytique"]])
         
@@ -265,7 +271,7 @@ elif page == "RETURNS EDITION":
             st.subheader("Top retours par ISBN")
             st.dataframe(top_retours)
         else:
-            st.info("Aucun retour détecté pour le compte 709000000.")
+            st.info(f"Aucun retour détecté pour le compte {compte_retours}.")
 
 # =====================
 # CASH EDITION
