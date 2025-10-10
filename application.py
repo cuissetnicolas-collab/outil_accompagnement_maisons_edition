@@ -219,11 +219,13 @@ elif page == "ROYALTIES EDITION":
 # =====================
 elif page == "RETURNS EDITION":
     st.header("📦 RETURNS EDITION - Gestion des retours")
+    
     if "df_pivot" not in st.session_state:
         st.warning("⚠️ Générer d'abord le SOCLE EDITION.")
     else:
         param = st.session_state.get("param_comptes", {})
         st.info("⚠️ Assurez-vous que les comptes de ventes, retours et remises sont paramétrés dans SOCLE EDITION.")
+        
         comptes_ventes = param.get("ventes", [])
         comptes_retours = param.get("retours", [])
         comptes_remises = param.get("remises", [])
@@ -231,17 +233,40 @@ elif page == "RETURNS EDITION":
         df = st.session_state["df_pivot"].copy()
         df["Libelle"] = df.get("Libelle", df["Compte"].astype(str))
         
-        # Calcul indicateurs
-        ca_brut = df[df["Compte"].astype(str).str[:len(comptes_ventes[0])].isin(comptes_ventes)]["Crédit"].sum() if comptes_ventes else 0
-        total_retours = df[df["Compte"].astype(str).str[:len(comptes_retours[0])].isin(comptes_retours)]["Débit"].sum() if comptes_retours else 0
-        remises = df[df["Compte"].astype(str).str[:len(comptes_remises[0])].isin(comptes_remises)]["Débit"].sum() if comptes_remises else 0
+        # ---- CA Brut ----
+        if comptes_ventes:
+            df_ventes = df[df["Compte"].astype(str).str.startswith(tuple(comptes_ventes))].copy()
+            df_ventes["Solde"] = df_ventes["Crédit"] - df_ventes["Débit"]
+            ca_brut = df_ventes["Solde"].sum()
+        else:
+            ca_brut = 0
+        
+        # ---- Retours ----
+        if comptes_retours:
+            df_retours = df[df["Compte"].astype(str).isin(comptes_retours)].copy()
+            df_retours["Solde"] = df_retours["Débit"] - df_retours["Crédit"]
+            total_retours = df_retours["Solde"].sum()
+        else:
+            total_retours = 0
+        
+        # ---- Remises ----
+        if comptes_remises:
+            df_remises = df[df["Compte"].astype(str).isin(comptes_remises)].copy()
+            df_remises["Solde"] = df_remises["Débit"] - df_remises["Crédit"]
+            remises = df_remises["Solde"].sum()
+        else:
+            remises = 0
+        
+        # Affichage indicateurs
         st.metric("💰 CA Brut", f"{ca_brut:,.0f} €")
         st.metric("📦 Retours", f"{total_retours:,.0f} €")
         st.metric("🏷️ Remises libraires", f"{remises:,.0f} €")
         
-        top_retours = df[df["Compte"].astype(str).str[:len(comptes_retours[0])].isin(comptes_retours)].groupby("Code_Analytique", as_index=False)["Débit"].sum().sort_values("Débit", ascending=False)
-        st.subheader("Top retours par ISBN")
-        st.dataframe(top_retours)
+        # Top retours par ISBN
+        if comptes_retours:
+            top_retours = df_retours.groupby("Code_Analytique", as_index=False)["Solde"].sum().sort_values("Solde", ascending=False)
+            st.subheader("Top retours par ISBN")
+            st.dataframe(top_retours)
 
 # =====================
 # CASH EDITION
