@@ -227,10 +227,19 @@ elif page == "RETURNS EDITION":
         df["Libelle"] = df.get("Libelle", df["Compte"])
         
         # --- Normalisation des comptes ---
-        # Convert float -> int -> str pour éviter les problèmes
-        df["Compte"] = df["Compte"].fillna(0).astype(int).astype(str).str.strip()
+        # Convert float -> int -> str seulement si possible
+        def normalize_compte(x):
+            try:
+                return str(int(float(x))).strip()
+            except:
+                return str(x).strip()
         
-        # --- Comptes utilisés ---
+        df["Compte"] = df["Compte"].apply(normalize_compte)
+        
+        st.subheader("📋 Comptes disponibles dans les données")
+        st.write(sorted(df["Compte"].unique()))
+        
+        # --- Comptes exacts ---
         comptes_ventes = ["701"]          # adapte selon tes comptes de ventes
         compte_retours = "709000000"      # compte de retours
         compte_remises = "709100000"      # compte de remises
