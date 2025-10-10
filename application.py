@@ -222,21 +222,51 @@ elif page == "RETURNS EDITION":
     if "df_pivot" not in st.session_state:
         st.warning("⚠️ Générer d'abord le SOCLE EDITION.")
     else:
-        st.info("⚙️ Assurez-vous que vos comptes de VENTES, REMISES et RETOURS ont été paramétrés dans SOCLE EDITION.")
-        param_comptes = st.session_state.get("param_comptes", {})
         df = st.session_state["df_pivot"].copy()
-        if param_comptes:
-            ventes_comptes = param_comptes["ventes"]
-            retours_comptes = param_comptes["retours"]
-            remises_comptes = param_comptes["remises"]
-            df["Type"] = np.where(df["Compte"].isin(retours_comptes), "Retour",
-                            np.where(df["Compte"].isin(remises_comptes), "Remise",
-                                     np.where(df["Compte"].isin(ventes_comptes), "Vente","Autre")))
-            df_retours = df[df["Type"].isin(["Retour","Remise","Vente"])].copy()
-            df_indicateurs = df_retours.groupby(["Code_Analytique","Type"], as_index=False)["Crédit"].sum().pivot(index="Code_Analytique", columns="Type", values="Crédit").fillna(0)
-            st.dataframe(df_indicateurs)
+        param = st.session_state.get("param_comptes", {})
+
+        # Comptes paramétrés dans SOCLE EDITION
+        comptes_ventes = [c.strip() for c in param.get("ventes", []) if c.strip()]
+        comptes_retours = [c.strip() for c in param.get("retours", []) if c.strip()]
+        comptes_remises = [c.strip() for c in param.get("remises", []) if c.strip()]
+
+        if not comptes_retours or not comptes_remises:
+            st.warning("⚠️ Veuillez définir les comptes retours et remises dans SOCLE EDITION (ex: 709000000, 709100000).")
+            st.stop()
+
+        # Nettoyage
+        df["Compte"] = df["Compte"].astype(str).str.strip()
+        df["Débit"] = pd.to_numeric(df["Débit"], errors="coerce").fillna(0)
+        df["Crédit"] = pd.to_numeric(df["Crédit"], errors="coerce").fillna(0)
+
+        # Calcul du chiffre d'affaires brut (soldes des comptes de ventes)
+        df_ventes = df[df["Compte"].isin(comptes_ventes)]
+        ca_brut = (df_ventes["Crédit"].sum() - df_ventes["Débit"].sum()) if not df_ventes.empty else 0
+
+        # Calcul des retours (comptes paramétrés pour retours)
+        df_retours = df[df["Compte"].isin(comptes_retours)]
+        total_retours = (df_retours["Débit"].sum() - df_retours["Crédit"].sum()) if not df_retours.empty else 0
+
+        # Calcul des remises (comptes paramétrés pour remises)
+        df_remises = df[df["Compte"].isin(comptes_remises)]
+        total_remises = (df_remises["Débit"].sum() - df_remises["Crédit"].sum()) if not df_remises.empty else 0
+
+        # Affichage des indicateurs
+        st.metric("💰 CA Brut", f"{ca_brut:,.0f} €")
+        st.metric("📦 Retours", f"{total_retours:,.0f} €")
+        st.metric("🏷️ Remises libraires", f"{total_remises:,.0f} €")
+
+        # Détail par ISBN pour les retours
+        if not df_retours.empty:
+            top_retours = (
+                df_retours.groupby("Code_Analytique", as_index=False)["Débit"]
+                .sum()
+                .sort_values("Débit", ascending=False)
+            )
+            st.subheader("📚 Détail des retours par ISBN")
+            st.dataframe(top_retours)
         else:
-            st.warning("⚠️ Paramétrage des comptes manquant.")
+            st.info("Aucun retour détecté pour les comptes spécifiés.")
 
 # =====================
 # SYNTHESE GLOBALE
