@@ -233,37 +233,35 @@ elif page == "RETURNS EDITION":
         df = st.session_state["df_pivot"].copy()
         df["Libelle"] = df.get("Libelle", df["Compte"].astype(str))
         
+        # --- DEBUG : vérifier les comptes disponibles ---
+        st.subheader("📋 Comptes disponibles dans les données")
+        st.write(sorted(df["Compte"].unique()))
+        
+        # --- Masques de filtrage ---
+        mask_ventes = df["Compte"].astype(str).str.startswith(tuple(comptes_ventes)) if comptes_ventes else pd.Series(False, index=df.index)
+        mask_retours = df["Compte"].astype(str).str.startswith(tuple(comptes_retours)) if comptes_retours else pd.Series(False, index=df.index)
+        mask_remises = df["Compte"].astype(str).str.startswith(tuple(comptes_remises)) if comptes_remises else pd.Series(False, index=df.index)
+        
+        # --- DEBUG : afficher les lignes détectées ---
+        st.subheader("🔍 Lignes détectées pour les retours")
+        st.write(df.loc[mask_retours, ["Compte", "Débit", "Crédit", "Code_Analytique"]])
+        
+        st.subheader("🔍 Lignes détectées pour les remises")
+        st.write(df.loc[mask_remises, ["Compte", "Débit", "Crédit", "Code_Analytique"]])
+        
         # --- Calcul indicateurs ---
-        # CA Brut
-        if comptes_ventes:
-            mask_ventes = df["Compte"].astype(str).str.startswith(tuple(comptes_ventes))
-            ca_brut = df.loc[mask_ventes, "Crédit"].sum() - df.loc[mask_ventes, "Débit"].sum()
-        else:
-            ca_brut = 0
+        ca_brut = df.loc[mask_ventes, "Crédit"].sum() - df.loc[mask_ventes, "Débit"].sum()
+        total_retours = df.loc[mask_retours, "Crédit"].sum() - df.loc[mask_retours, "Débit"].sum()
+        remises = df.loc[mask_remises, "Crédit"].sum() - df.loc[mask_remises, "Débit"].sum()
         
-        # Retours
-        if comptes_retours:
-            mask_retours = df["Compte"].astype(str).str.startswith(tuple(comptes_retours))
-            total_retours = df.loc[mask_retours, "Débit"].sum() - df.loc[mask_retours, "Crédit"].sum()
-        else:
-            total_retours = 0
-        
-        # Remises libraires
-        if comptes_remises:
-            mask_remises = df["Compte"].astype(str).str.startswith(tuple(comptes_remises))
-            remises = df.loc[mask_remises, "Débit"].sum() - df.loc[mask_remises, "Crédit"].sum()
-        else:
-            remises = 0
-        
-        # --- Affichage indicateurs ---
         st.metric("💰 CA Brut", f"{ca_brut:,.0f} €")
         st.metric("📦 Retours", f"{total_retours:,.0f} €")
         st.metric("🏷️ Remises libraires", f"{remises:,.0f} €")
         
         # --- Top retours par ISBN ---
-        if comptes_retours:
+        if mask_retours.any():
             df_retours_isbn = df.loc[mask_retours].copy()
-            df_retours_isbn["Solde_retours"] = df_retours_isbn["Débit"] - df_retours_isbn["Crédit"]
+            df_retours_isbn["Solde_retours"] = df_retours_isbn["Crédit"] - df_retours_isbn["Débit"]
             top_retours = (
                 df_retours_isbn.groupby("Code_Analytique", as_index=False)
                 .agg({"Solde_retours": "sum"})
@@ -272,7 +270,7 @@ elif page == "RETURNS EDITION":
             st.subheader("Top retours par ISBN")
             st.dataframe(top_retours)
         else:
-            st.info("Aucun compte de retours paramétré.")
+            st.info("Aucun compte de retours détecté. Vérifiez vos codes dans SOCLE EDITION.")
 
 # =====================
 # CASH EDITION
