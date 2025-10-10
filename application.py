@@ -181,18 +181,19 @@ elif page == "ROYALTIES EDITION":
     st.info(f"Taux sélectionné : {taux_fixe}%")
 
 # =====================
-# RETURNS EDITION
-# =====================
-elif page == "RETURNS EDITION":
+# MODULE 3 : RETURNS EDITION
+# ============================
+elif menu == "RETURNS EDITION (Retours & Remises)":
     st.header("📦 RETURNS EDITION - Analyse des retours et remises libraires")
 
     st.info("""
-    💡 **Note importante**
-    Les indicateurs s’appuient sur les **numéros de comptes** présents dans votre fichier comptable.
+    💡 **Note importante**  
+    Les indicateurs de retours et de chiffre d’affaires s’appuient sur les **numéros de comptes** 
+    ou **libellés** présents dans votre fichier comptable.  
     Chaque cabinet doit s’assurer que les comptes suivants sont clairement identifiés :
-    - Compte de **ventes brutes** (ex : 701...)
-    - Compte de **remises libraires** (ex : 7091...)
-    - Compte de **retours de livres** (ex : 709...)
+    - Compte de **ventes brutes** (ex : 701...)  
+    - Compte de **remises libraires** (ex : 7091...)  
+    - Compte de **retours de livres** (ex : 709...)  
     """)
 
     if "df_pivot" not in st.session_state:
@@ -201,6 +202,7 @@ elif page == "RETURNS EDITION":
 
     df = st.session_state["df_pivot"].copy()
 
+    # 🔹 Paramétrage des comptes
     st.subheader("⚙️ Paramétrage des comptes comptables")
     compte_ventes = st.text_input("Numéro de compte des ventes brutes :", value="701")
     compte_retours = st.text_input("Numéro de compte des retours :", value="709")
@@ -225,6 +227,7 @@ elif page == "RETURNS EDITION":
         col3.metric("Remises", f"{total_remises:,.0f} €")
         col4.metric("CA net", f"{ca_net:,.0f} €")
 
+        # Analyse par ISBN
         st.markdown("### 🔎 Analyse par ISBN")
         ventes_isbn = ventes.groupby("Code_Analytique", as_index=False)["Crédit"].sum().rename(columns={"Crédit": "Ventes"})
         retours_isbn = retours.groupby("Code_Analytique", as_index=False)["Débit"].sum().rename(columns={"Débit": "Retours"})
@@ -233,9 +236,7 @@ elif page == "RETURNS EDITION":
         df_merge["Taux_retour_%"] = np.where(df_merge["Ventes"] != 0, (df_merge["Retours"] / df_merge["Ventes"]) * 100, 0)
 
         st.dataframe(df_merge.sort_values("Taux_retour_%", ascending=False))
-
-        fig = px.bar(df_merge, x="Code_Analytique", y="Taux_retour_%",
-                     title="Taux de retour par ISBN", labels={"Code_Analytique": "ISBN", "Taux_retour_%": "% Retours"})
+        fig = px.bar(df_merge, x="Code_Analytique", y="Taux_retour_%", title="Taux de retour par ISBN")
         st.plotly_chart(fig, use_container_width=True)
 
         # Export Excel
