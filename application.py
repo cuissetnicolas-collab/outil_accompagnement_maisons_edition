@@ -218,55 +218,25 @@ elif page == "ROYALTIES EDITION":
 # RETURNS EDITION
 # =====================
 elif page == "RETURNS EDITION":
-    st.header("📦 RETURNS EDITION - Analyse des retours et remises libraires")
-
+    st.header("📦 RETURNS EDITION - Gestion des retours")
     if "df_pivot" not in st.session_state:
-        st.warning("⚠️ Vous devez d'abord générer le SOCLE EDITION.")
-        st.stop()
-
-    df = st.session_state["df_pivot"].copy()
-
-    def match_compte(compte, target):
-        if pd.isna(compte):
-            return False
-        try:
-            compte_int = int(float(compte))
-            return compte_int == int(target)
-        except:
-            return str(compte).strip().lstrip("0") == str(int(target))
-
-    compte_retours = "709000000"
-    compte_remises = "709100000"
-
-    retours = df[df["Compte"].apply(lambda x: match_compte(x, compte_retours))]
-    remises = df[df["Compte"].apply(lambda x: match_compte(x, compte_remises))]
-    ventes = df[df["Compte"].astype(str).str.startswith("701")]
-
-    ca_brut = ventes["Crédit"].sum() - ventes["Débit"].sum()
-    total_retours = retours["Crédit"].sum() - retours["Débit"].sum()
-    total_remises = remises["Crédit"].sum() - remises["Débit"].sum()
-    ca_net = ca_brut - total_retours - total_remises
-
-    st.markdown("### 📊 Résumé global")
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("CA brut", f"{ca_brut:,.0f} €")
-    col2.metric("Retours (709000000)", f"{total_retours:,.0f} €")
-    col3.metric("Remises (709100000)", f"{total_remises:,.0f} €")
-    col4.metric("CA net", f"{ca_net:,.0f} €")
-
-    ventes_isbn = ventes.groupby("Code_Analytique", as_index=False).agg({"Crédit": "sum"}).rename(columns={"Crédit": "Ventes"})
-    retours_isbn = retours.groupby("Code_Analytique", as_index=False).agg({"Crédit": "sum"}).rename(columns={"Crédit": "Retours"})
-    remises_isbn = remises.groupby("Code_Analytique", as_index=False).agg({"Crédit": "sum"}).rename(columns={"Crédit": "Remises"})
-
-    df_merge = ventes_isbn.merge(retours_isbn, on="Code_Analytique", how="outer").merge(remises_isbn, on="Code_Analytique", how="outer").fillna(0)
-    df_merge["Taux_retour_%"] = np.where(df_merge["Ventes"] != 0, (df_merge["Retours"] / df_merge["Ventes"]) * 100, 0)
-    df_merge["Taux_remise_%"] = np.where(df_merge["Ventes"] != 0, (df_merge["Remises"] / df_merge["Ventes"]) * 100, 0)
-    st.dataframe(df_merge.sort_values("Taux_retour_%", ascending=False))
-
-    fig = px.bar(df_merge, x="Code_Analytique", y=["Taux_retour_%","Taux_remise_%"],
-                 title="Taux de retour et remise par ISBN",
-                 labels={"value":"%", "variable":"Indicateur"})
-    st.plotly_chart(fig, use_container_width=True)
+        st.warning("⚠️ Générer d'abord le SOCLE EDITION.")
+    else:
+        st.info("⚙️ Assurez-vous que vos comptes de VENTES, REMISES et RETOURS ont été paramétrés dans SOCLE EDITION.")
+        param_comptes = st.session_state.get("param_comptes", {})
+        df = st.session_state["df_pivot"].copy()
+        if param_comptes:
+            ventes_comptes = param_comptes["ventes"]
+            retours_comptes = param_comptes["retours"]
+            remises_comptes = param_comptes["remises"]
+            df["Type"] = np.where(df["Compte"].isin(retours_comptes), "Retour",
+                            np.where(df["Compte"].isin(remises_comptes), "Remise",
+                                     np.where(df["Compte"].isin(ventes_comptes), "Vente","Autre")))
+            df_retours = df[df["Type"].isin(["Retour","Remise","Vente"])].copy()
+            df_indicateurs = df_retours.groupby(["Code_Analytique","Type"], as_index=False)["Crédit"].sum().pivot(index="Code_Analytique", columns="Type", values="Crédit").fillna(0)
+            st.dataframe(df_indicateurs)
+        else:
+            st.warning("⚠️ Paramétrage des comptes manquant.")
 
 # =====================
 # SYNTHESE GLOBALE
