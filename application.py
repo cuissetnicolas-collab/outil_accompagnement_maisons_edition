@@ -109,35 +109,56 @@ if page == "DATA EDITION":
 # SOCLE EDITION
 # =====================
 elif page == "SOCLE EDITION":
-    st.header("🛠️ SOCLE EDITION - Génération du pivot analytique")
-    if "df_comptables" not in st.session_state:
-        st.warning("⚠️ Importer d'abord les données via DATA EDITION.")
-    else:
-        df = st.session_state["df_comptables"].copy()
-        st.info("⚙️ Paramétrez vos numéros de comptes clés avant de générer le SOCLE.")
-        comptes_ventes = st.text_input("Numéros de comptes VENTES (ex: 701,706)", value="701")
-        comptes_retours = st.text_input("Numéros de comptes RETOURS (ex:7097,7098)", value="709000000")
-        comptes_remises = st.text_input("Numéros de comptes REMISES LIBRAIRES (ex:7091)", value="709100000")
-        comptes_banques = st.text_input("Numéros de comptes BANQUES (ex:512)", value="512")
-        comptes_charges = st.text_input("Numéros de comptes CHARGES (ex:6)", value="6")
-        
-        if st.button("Générer le SOCLE"):
-            for col in ["Famille_Analytique","Code_Analytique"]:
-                if col not in df.columns: df[col] = ""
-                else: df[col] = df[col].fillna("")
-            df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
-            pivot = df.groupby(["Compte","Famille_Analytique","Code_Analytique","Date"], as_index=False).agg({"Débit":"sum","Crédit":"sum"})
-            st.session_state["df_pivot"] = pivot
-            st.session_state["param_comptes"] = {
-                "ventes": [x.strip() for x in comptes_ventes.split(",")],
-                "retours": [x.strip() for x in comptes_retours.split(",")],
-                "remises": [x.strip() for x in comptes_remises.split(",")],
-                "banques": [x.strip() for x in comptes_banques.split(",")],
-                "charges": [x.strip() for x in comptes_charges.split(",")]
-            }
-            st.success("✅ SOCLE EDITION généré et comptes paramétrés.")
-            st.dataframe(pivot.head(20))
+    st.header("📚 SOCLE ÉDITION - Import et paramétrage comptable")
 
+    uploaded_file = st.file_uploader("📤 Importer le fichier comptable (Excel ou CSV)", type=["xlsx", "xls", "csv"])
+    if uploaded_file:
+        try:
+            if uploaded_file.name.endswith(".csv"):
+                df = pd.read_csv(uploaded_file, dtype=str)
+            else:
+                df = pd.read_excel(uploaded_file, dtype=str)
+
+            # 🧹 Nettoyage : on conserve la longueur complète du compte
+            df["Compte"] = (
+                df["Compte"]
+                .astype(str)
+                .str.replace(r"\.0$", "", regex=True)
+                .str.replace(r"\s+", "", regex=True)
+                .str.strip()
+            )
+
+            # Conversion numérique des montants
+            for col in ["Débit", "Crédit"]:
+                if col in df.columns:
+                    df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
+
+            st.session_state["df_pivot"] = df
+
+            st.success("✅ Données chargées avec succès.")
+            st.write("Aperçu des 10 premières lignes :")
+            st.dataframe(df.head(10))
+
+            # Paramétrage des comptes
+            st.subheader("⚙️ Paramétrage des comptes")
+            with st.form("param_form"):
+                ventes = st.text_input("Comptes de ventes (séparés par des virgules)", "707000000")
+                retours = st.text_input("Comptes de retours", "709000000")
+                remises = st.text_input("Comptes de remises libraires", "709100000")
+                provisions = st.text_input("Comptes de provisions", "")
+                submitted = st.form_submit_button("Enregistrer les paramètres")
+
+                if submitted:
+                    st.session_state["param_comptes"] = {
+                        "ventes": [x.strip() for x in ventes.split(",") if x.strip()],
+                        "retours": [x.strip() for x in retours.split(",") if x.strip()],
+                        "remises": [x.strip() for x in remises.split(",") if x.strip()],
+                        "provisions": [x.strip() for x in provisions.split(",") if x.strip()],
+                    }
+                    st.success("Paramètres enregistrés ✅")
+
+        except Exception as e:
+            st.error(f"Erreur lors de la lecture du fichier : {e}")
 # =====================
 # REPARTITION CHARGES FIXES
 # =====================
@@ -218,80 +239,78 @@ elif page == "ROYALTIES EDITION":
 # RETURNS EDITION
 # =====================
 elif page == "RETURNS EDITION":
-    st.header("📦 RETURNS EDITION - Gestion des retours")
+    st.header("📦 RETURNS EDITION - Retours & Remises")
+
     if "df_pivot" not in st.session_state:
-        st.warning("⚠️ Générer d'abord le SOCLE EDITION.")
-    else:
-        df = st.session_state["df_pivot"].copy()
-        param = st.session_state.get("param_comptes", {})
+        st.warning("⚠️ Veuillez d'abord générer le SOCLE ÉDITION.")
+        st.stop()
 
-        comptes_ventes = [c.strip() for c in param.get("ventes", []) if c.strip()]
-        comptes_retours = [c.strip() for c in param.get("retours", []) if c.strip()]
-        comptes_remises = [c.strip() for c in param.get("remises", []) if c.strip()]
+    df = st.session_state["df_pivot"].copy()
+    param = st.session_state.get("param_comptes", {})
 
-        if not comptes_retours or not comptes_remises:
-            st.warning("⚠️ Veuillez définir les comptes retours et remises dans SOCLE EDITION (ex: 709000000 et 709100000).")
-            st.stop()
+    comptes_retours = param.get("retours", [])
+    comptes_remises = param.get("remises", [])
 
-        # =====================
-        # 🧹 Nettoyage des données
-        # =====================
-        df["Compte"] = (
-            df["Compte"]
-            .astype(str)
+    if not comptes_retours or not comptes_remises:
+        st.warning("⚠️ Paramétrez d'abord les comptes retours et remises dans le SOCLE ÉDITION.")
+        st.stop()
+
+    # Nettoyage des comptes
+    df["Compte"] = (
+        df["Compte"].astype(str)
+        .str.replace(r"\.0$", "", regex=True)
+        .str.replace(r"\s+", "", regex=True)
+        .str.strip()
+    )
+    df["Débit"] = pd.to_numeric(df["Débit"], errors="coerce").fillna(0)
+    df["Crédit"] = pd.to_numeric(df["Crédit"], errors="coerce").fillna(0)
+    df["Solde"] = df["Crédit"] - df["Débit"]  # 🔹 solde global
+
+    def filtrer_comptes(df, comptes_cibles):
+        comptes_cibles_nettoyés = [
+            c.replace(" ", "").replace(".0", "").strip() for c in comptes_cibles
+        ]
+        df["Compte_clean"] = (
+            df["Compte"].astype(str)
             .str.replace(r"\.0$", "", regex=True)
             .str.replace(r"\s+", "", regex=True)
             .str.strip()
         )
-        df["Débit"] = pd.to_numeric(df["Débit"], errors="coerce").fillna(0)
-        df["Crédit"] = pd.to_numeric(df["Crédit"], errors="coerce").fillna(0)
-        df["Solde"] = df["Crédit"] - df["Débit"]  # 🔹 solde global, et non le débit seul
+        return df[df["Compte_clean"].isin(comptes_cibles_nettoyés)]
 
-        # =====================
-        # 🧠 Filtrage exact des comptes
-        # =====================
-        def filtrer_comptes(df, comptes_cibles):
-            comptes_cibles_nettoyés = [
-                c.replace(" ", "").replace(".0", "").strip() for c in comptes_cibles
-            ]
-            return df[df["Compte"].isin(comptes_cibles_nettoyés)]
+    # Application du filtre
+    df_retours = filtrer_comptes(df, comptes_retours)
+    df_remises = filtrer_comptes(df, comptes_remises)
 
-        df_retours = filtrer_comptes(df, comptes_retours)
-        df_remises = filtrer_comptes(df, comptes_remises)
+    # Calculs
+    total_retours = df_retours["Solde"].sum() if not df_retours.empty else 0
+    total_remises = df_remises["Solde"].sum() if not df_remises.empty else 0
 
-        # =====================
-        # 💰 Calculs
-        # =====================
-        total_retours = df_retours["Solde"].sum() if not df_retours.empty else 0
-        total_remises = df_remises["Solde"].sum() if not df_remises.empty else 0
+    st.metric("📦 Retours (solde global du compte 709000000)", f"{total_retours:,.0f} €")
+    st.metric("🏷️ Remises libraires (solde global du compte 709100000)", f"{total_remises:,.0f} €")
 
-        st.metric("📦 Retours (solde global du compte 709000000)", f"{total_retours:,.0f} €")
-        st.metric("🏷️ Remises libraires (solde global du compte 709100000)", f"{total_remises:,.0f} €")
+    # Détails
+    if not df_retours.empty:
+        st.subheader("📘 Détail des retours par code analytique")
+        detail_retours = (
+            df_retours.groupby("Code_Analytique", as_index=False)["Solde"]
+            .sum()
+            .sort_values("Solde", ascending=False)
+        )
+        st.dataframe(detail_retours)
+    else:
+        st.info("Aucun retour détecté pour le compte 709000000.")
 
-        # =====================
-        # 📚 Détail par ISBN
-        # =====================
-        if not df_retours.empty:
-            st.subheader("Détail des retours par ISBN")
-            top_retours = (
-                df_retours.groupby("Code_Analytique", as_index=False)["Solde"]
-                .sum()
-                .sort_values("Solde", ascending=False)
-            )
-            st.dataframe(top_retours)
-        else:
-            st.info("Aucun retour détecté pour le compte de retours spécifié.")
-
-        if not df_remises.empty:
-            st.subheader("Détail des remises par ISBN")
-            top_remises = (
-                df_remises.groupby("Code_Analytique", as_index=False)["Solde"]
-                .sum()
-                .sort_values("Solde", ascending=False)
-            )
-            st.dataframe(top_remises)
-        else:
-            st.info("Aucune remise détectée pour le compte de remises spécifié.")
+    if not df_remises.empty:
+        st.subheader("📗 Détail des remises par code analytique")
+        detail_remises = (
+            df_remises.groupby("Code_Analytique", as_index=False)["Solde"]
+            .sum()
+            .sort_values("Solde", ascending=False)
+        )
+        st.dataframe(detail_remises)
+    else:
+        st.info("Aucune remise détectée pour le compte 709100000.")
 # =====================
 # SYNTHESE GLOBALE
 # =====================
