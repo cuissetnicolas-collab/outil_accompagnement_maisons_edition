@@ -267,7 +267,6 @@ elif page == "RETURNS EDITION":
             st.dataframe(top_retours)
         else:
             st.info("Aucun retour détecté pour les comptes spécifiés.")
-
 # =====================
 # SYNTHESE GLOBALE
 # =====================
