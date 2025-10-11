@@ -210,6 +210,7 @@ elif page == "ROYALTIES EDITION":
 # =====================
 elif page == "RETURNS EDITION":
     st.header("📦 RETURNS EDITION - Gestion des retours")
+    
     if "df_pivot" not in st.session_state:
         st.warning("⚠️ Générer d'abord le SOCLE EDITION.")
     else:
@@ -224,37 +225,40 @@ elif page == "RETURNS EDITION":
         comptes_remises = param.get("remises", [])
         col_libelle = st.text_input("Colonne Libellé (optionnel pour distinguer Retours/Remises)", value="Libellé")
 
-        # Vérifier si on peut utiliser la colonne Libellé
+        # Vérifier si colonne libellé existe
         use_libelle = col_libelle in df.columns
 
         # --- FILTRAGE ---
-        def filtre_compte_exact(df, prefix_list):
+        def filtre_compte(df, prefix_list):
             if not prefix_list: 
                 return pd.DataFrame()
             mask = df["Compte"].astype(str).str.startswith(tuple(prefix_list))
             return df[mask]
 
         # Retours
-        df_ret = filtre_compte_exact(df, comptes_retours)
+        df_ret = filtre_compte(df, comptes_retours)
         if use_libelle:
             df_ret = df_ret[df_ret[col_libelle].str.contains("Retour", case=False, na=False)]
-        df_ret["Solde"] = abs(df_ret["Crédit"] - df_ret["Débit"])
+        if not df_ret.empty:
+            df_ret["Montant"] = abs(df_ret["Débit"] - df_ret["Crédit"])
 
         # Remises
-        df_remises = filtre_compte_exact(df, comptes_remises)
+        df_remises = filtre_compte(df, comptes_remises)
         if use_libelle:
             df_remises = df_remises[df_remises[col_libelle].str.contains("Remise", case=False, na=False)]
-        df_remises["Solde"] = abs(df_remises["Crédit"] - df_remises["Débit"])  # Remises toujours positives
+        if not df_remises.empty:
+            df_remises["Montant"] = abs(df_remises["Débit"] - df_remises["Crédit"])
 
         # Ventes
-        df_ventes = filtre_compte_exact(df, comptes_ventes)
-        df_ventes["Solde"] = df_ventes["Crédit"] - df_ventes["Débit"]
+        df_ventes = filtre_compte(df, comptes_ventes)
+        if not df_ventes.empty:
+            df_ventes["Montant"] = abs(df_ventes["Crédit"] - df_ventes["Débit"])
 
         # --- INDICATEURS ---
         st.subheader("📊 Indicateurs Retours / Remises")
-        total_ventes = df_ventes["Solde"].sum() if not df_ventes.empty else 0
-        total_retours = df_ret["Solde"].sum() if not df_ret.empty else 0
-        total_remises = df_remises["Solde"].sum() if not df_remises.empty else 0
+        total_ventes = df_ventes["Montant"].sum() if not df_ventes.empty else 0
+        total_retours = df_ret["Montant"].sum() if not df_ret.empty else 0
+        total_remises = df_remises["Montant"].sum() if not df_remises.empty else 0
         provision_retours = df[df["Compte"].astype(str).str.startswith("681")]["Débit"].sum()
 
         st.metric("Total ventes (brut)", f"{total_ventes:,.0f} €")
@@ -265,19 +269,15 @@ elif page == "RETURNS EDITION":
         # --- Détail par ISBN ---
         if not df_ret.empty:
             st.subheader("Retours par ISBN")
-            ret_isbn = df_ret.groupby("Code_Analytique", as_index=False).agg({"Solde":"sum"})
-            ret_isbn = ret_isbn.rename(columns={"Solde":"Montant"})
+            ret_isbn = df_ret.groupby("Code_Analytique", as_index=False).agg({"Montant":"sum"})
             st.dataframe(ret_isbn)
         else:
             st.info("Aucun retour détecté selon vos comptes/libellés paramétrés.")
 
         if not df_remises.empty:
             st.subheader("Remises par ISBN")
-            rem_isbn = df_remises.groupby("Code_Analytique", as_index=False).agg({"Solde":"sum"})
-            rem_isbn = rem_isbn.rename(columns={"Solde":"Montant"})
+            rem_isbn = df_remises.groupby("Code_Analytique", as_index=False).agg({"Montant":"sum"})
             st.dataframe(rem_isbn)
-        else:
-            st.info("Aucune remise détectée selon vos comptes/libellés paramétrés.")
 # =====================
 # CASH EDITION
 # =====================
