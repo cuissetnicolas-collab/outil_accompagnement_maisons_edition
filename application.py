@@ -225,71 +225,73 @@ elif page == "RETURNS EDITION":
         df = st.session_state["df_pivot"].copy()
         param = st.session_state.get("param_comptes", {})
 
-        # Comptes paramétrés dans SOCLE EDITION
         comptes_ventes = [c.strip() for c in param.get("ventes", []) if c.strip()]
         comptes_retours = [c.strip() for c in param.get("retours", []) if c.strip()]
         comptes_remises = [c.strip() for c in param.get("remises", []) if c.strip()]
 
         if not comptes_retours or not comptes_remises:
-            st.warning("⚠️ Veuillez définir les comptes retours et remises dans SOCLE EDITION (ex: 709000000, 709100000).")
+            st.warning("⚠️ Veuillez définir les comptes retours et remises dans SOCLE EDITION (ex: 709000000 et 709100000).")
             st.stop()
 
         # =====================
-        # 🧹 Nettoyage et uniformisation des comptes
+        # 🧹 Nettoyage des données
         # =====================
         df["Compte"] = (
             df["Compte"]
             .astype(str)
-            .str.replace(r"\.0$", "", regex=True)  # supprime le .0 si Excel a converti en float
-            .str.replace(r"\s+", "", regex=True)   # supprime les espaces
+            .str.replace(r"\.0$", "", regex=True)
+            .str.replace(r"\s+", "", regex=True)
             .str.strip()
         )
-
-        # Conversion numérique propre
         df["Débit"] = pd.to_numeric(df["Débit"], errors="coerce").fillna(0)
         df["Crédit"] = pd.to_numeric(df["Crédit"], errors="coerce").fillna(0)
-
-        # Solde global par ligne
-        df["Solde"] = df["Débit"] - df["Crédit"]
+        df["Solde"] = df["Crédit"] - df["Débit"]  # 🔹 solde global, et non le débit seul
 
         # =====================
-        # 🔍 Vérification et filtrage exact
+        # 🧠 Filtrage exact des comptes
         # =====================
-        st.write("Comptes trouvés dans le fichier :", sorted(df["Compte"].unique())[:50])
-        st.info(f"Comptes utilisés - Retours : {comptes_retours} | Remises : {comptes_remises}")
+        def filtrer_comptes(df, comptes_cibles):
+            comptes_cibles_nettoyés = [
+                c.replace(" ", "").replace(".0", "").strip() for c in comptes_cibles
+            ]
+            return df[df["Compte"].isin(comptes_cibles_nettoyés)]
 
-        # Filtrage précis (comptes exacts)
-        df_retours = df[df["Compte"].isin(comptes_retours)]
-        df_remises = df[df["Compte"].isin(comptes_remises)]
-        df_ventes = df[df["Compte"].isin(comptes_ventes)]
+        df_retours = filtrer_comptes(df, comptes_retours)
+        df_remises = filtrer_comptes(df, comptes_remises)
 
         # =====================
         # 💰 Calculs
         # =====================
-        ca_brut = df_ventes["Solde"].sum() if not df_ventes.empty else 0
         total_retours = df_retours["Solde"].sum() if not df_retours.empty else 0
         total_remises = df_remises["Solde"].sum() if not df_remises.empty else 0
 
-        # =====================
-        # 📊 Affichage synthétique
-        # =====================
-        st.metric("💰 Chiffre d'affaires brut", f"{ca_brut:,.0f} €")
-        st.metric("📦 Retours (solde global du compte)", f"{total_retours:,.0f} €")
-        st.metric("🏷️ Remises libraires (solde global du compte)", f"{total_remises:,.0f} €")
+        st.metric("📦 Retours (solde global du compte 709000000)", f"{total_retours:,.0f} €")
+        st.metric("🏷️ Remises libraires (solde global du compte 709100000)", f"{total_remises:,.0f} €")
 
         # =====================
-        # 📚 Détail des retours
+        # 📚 Détail par ISBN
         # =====================
         if not df_retours.empty:
+            st.subheader("Détail des retours par ISBN")
             top_retours = (
                 df_retours.groupby("Code_Analytique", as_index=False)["Solde"]
                 .sum()
                 .sort_values("Solde", ascending=False)
             )
-            st.subheader("Détail des retours par ISBN")
             st.dataframe(top_retours)
         else:
-            st.info("Aucun retour détecté pour les comptes spécifiés.")
+            st.info("Aucun retour détecté pour le compte de retours spécifié.")
+
+        if not df_remises.empty:
+            st.subheader("Détail des remises par ISBN")
+            top_remises = (
+                df_remises.groupby("Code_Analytique", as_index=False)["Solde"]
+                .sum()
+                .sort_values("Solde", ascending=False)
+            )
+            st.dataframe(top_remises)
+        else:
+            st.info("Aucune remise détectée pour le compte de remises spécifié.")
 # =====================
 # SYNTHESE GLOBALE
 # =====================
