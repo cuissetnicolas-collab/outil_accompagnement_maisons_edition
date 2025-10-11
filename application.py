@@ -257,8 +257,17 @@ elif page == "RETURNS EDITION":
         else:
             provision_retours = 0
 
+        # --- TAUX ---
+        taux_retour = abs(total_retours) / abs(total_ventes) * 100 if total_ventes != 0 else 0
+        taux_remise = abs(total_remises) / abs(total_ventes) * 100 if total_ventes != 0 else 0
+
+        st.subheader("📊 Taux par rapport aux ventes")
+        col1, col2 = st.columns(2)
+        col1.metric("Taux de retour (%)", f"{taux_retour:.2f} %")
+        col2.metric("Taux de remise (%)", f"{taux_remise:.2f} %")
+
         # --- INDICATEURS ---
-        st.subheader("📊 Indicateurs Retours / Remises")
+        st.subheader("📊 Montants Retours / Remises")
         st.metric("Total ventes (brut)", f"{abs(total_ventes):,.0f} €")
         st.metric("Total retours", f"{abs(total_retours):,.0f} €")
         st.metric("Total remises", f"{abs(total_remises):,.0f} €")
@@ -287,11 +296,14 @@ elif page == "RETURNS EDITION":
             fig_trend.update_traces(texttemplate='%{text:,.0f}', textposition='outside')
             st.plotly_chart(fig_trend, use_container_width=True)
 
-        # --- Taux de retour sur ventes ---
-        if not df_ventes.empty and total_ventes != 0:
-            taux_retour = abs(total_retours) / abs(total_ventes) * 100
-            st.subheader("📈 Taux de retour sur ventes")
-            st.metric("Taux de retour (%)", f"{taux_retour:.2f} %")
+        if not df_remises.empty:
+            st.subheader("Tendance mensuelle des remises")
+            trend_rem = df_remises.groupby("Mois", as_index=False)["Montant_net"].sum()
+            trend_rem["Montant_net"] = trend_rem["Montant_net"].abs()
+            fig_trend_rem = px.bar(trend_rem, x="Mois", y="Montant_net", text="Montant_net",
+                                   title="Montant des remises par mois", labels={"Montant_net":"Montant (€)"})
+            fig_trend_rem.update_traces(texttemplate='%{text:,.0f}', textposition='outside')
+            st.plotly_chart(fig_trend_rem, use_container_width=True)
 # =====================
 # CASH EDITION
 # =====================
