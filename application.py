@@ -206,10 +206,10 @@ elif page == "ROYALTIES EDITION":
         st.dataframe(prevision)
 
 # =====================
-# RETURNS EDITION
+# RETURNS EDITION - indicateurs enrichis
 # =====================
 elif page == "RETURNS EDITION":
-    st.header("📦 RETURNS EDITION - Gestion des retours")
+    st.header("📦 RETURNS EDITION - Gestion des retours et indicateurs")
     if "df_pivot" not in st.session_state:
         st.warning("⚠️ Générer d'abord le SOCLE EDITION.")
     else:
@@ -226,55 +226,77 @@ elif page == "RETURNS EDITION":
 
         use_libelle = col_libelle in df.columns
 
-        def filtre_compte(df, prefix_list):
+        # --- FILTRAGE ---
+        def filtre_compte(df_compte, prefix_list):
             if not prefix_list: 
                 return pd.DataFrame()
-            mask = df["Compte"].astype(str).str.startswith(tuple(prefix_list))
-            return df[mask]
+            mask = df_compte["Compte"].astype(str).str.startswith(tuple(prefix_list))
+            return df_compte[mask]
+
+        def calc_montant(df_compte, libelle_filtre=None):
+            if df_compte.empty:
+                return pd.DataFrame(), 0, 0
+            if use_libelle and libelle_filtre:
+                df_compte = df_compte[df_compte[col_libelle].str.contains(libelle_filtre, case=False, na=False)]
+            df_compte["Montant_net"] = df_compte["Débit"] - df_compte["Crédit"]
+            total_abs = abs(df_compte["Montant_net"].sum())
+            nb_lignes = len(df_compte)
+            return df_compte, total_abs, nb_lignes
 
         # Retours
         df_ret = filtre_compte(df, comptes_retours)
-        if use_libelle:
-            df_ret = df_ret[df_ret[col_libelle].str.contains("Retour", case=False, na=False)]
+        df_ret, total_retours, nb_retours = calc_montant(df_ret, "Retour")
 
         # Remises
         df_remises = filtre_compte(df, comptes_remises)
-        if use_libelle:
-            df_remises = df_remises[df_remises[col_libelle].str.contains("Remise", case=False, na=False)]
+        df_remises, total_remises, nb_remises = calc_montant(df_remises, "Remise")
 
         # Ventes
         df_ventes = filtre_compte(df, comptes_ventes)
+        df_ventes, total_ventes, nb_ventes = calc_montant(df_ventes)
 
-        # Calcul montant net : Débit - Crédit, toujours positif
-        calc_net = lambda x: abs(x["Débit"] - x["Crédit"])
+        # Provision retours (681)
+        df_prov = df[df["Compte"].astype(str).str.startswith("681")]
+        df_prov["Montant_net"] = df_prov["Débit"] - df_prov["Crédit"]
+        provision_retours = abs(df_prov["Montant_net"].sum())
 
-        # --- INDICATEURS ---
+        # --- INDICATEURS GLOBAUX ---
         st.subheader("📊 Indicateurs Retours / Remises")
-        total_retours = df_ret.apply(calc_net, axis=1).sum() if not df_ret.empty else 0
-        total_remises = df_remises.apply(calc_net, axis=1).sum() if not df_remises.empty else 0
-        total_ventes = df_ventes["Crédit"].sum() if not df_ventes.empty else 0
-        provision_retours = df[df["Compte"].astype(str).str.startswith("681")]["Débit"].sum()
-
         st.metric("Total ventes (brut)", f"{total_ventes:,.0f} €")
-        st.metric("Total retours (net Débit-Crédit)", f"{total_retours:,.0f} €")
-        st.metric("Total remises (net Débit-Crédit)", f"{total_remises:,.0f} €")
+        st.metric("Total retours", f"{total_retours:,.0f} € ({nb_retours} lignes)")
+        st.metric("Total remises", f"{total_remises:,.0f} € ({nb_remises} lignes)")
         st.metric("Provision retours (681)", f"{provision_retours:,.0f} €")
-        st.metric("Taux retours / CA brut", f"{(total_retours/total_ventes*100 if total_ventes else 0):.2f} %")
-        st.metric("Taux remises / CA brut", f"{(total_remises/total_ventes*100 if total_ventes else 0):.2f} %")
-        st.metric("CA net après retours/remises", f"{(total_ventes - total_retours - total_remises):,.0f} €")
 
-        # --- Détail par ISBN ---
+        # --- DETAIL PAR ISBN ---
         if not df_ret.empty:
             st.subheader("Retours par ISBN")
-            ret_isbn = df_ret.groupby("Code_Analytique", as_index=False).apply(lambda x: (x["Débit"]-x["Crédit"]).sum())
-            ret_isbn.columns = ["Code_Analytique", "Montant_retour"]
-            st.dataframe(ret_isbn)
+            ret_isbn = df_ret.groupby("Code_Analytique", as_index=False).agg({"Montant_net":"sum"})
+            ret_isbn["Montant_net"] = ret_isbn["Montant_net"].abs()
+            # % retours / ventes
+            ventes_isbn = df_ventes.groupby("Code_Analytique", as_index=False).agg({"Montant_net":"sum"})
+            ventes_isbn.rename(columns={"Montant_net":"Ventes_net"}, inplace=True)
+            ret_isbn = ret_isbn.merge(ventes_isbn, on="Code_Analytique", how="left")
+            ret_isbn["% retours"] = ret_isbn["Montant_net"] / ret_isbn["Ventes_net"] * 100
+            st.dataframe(ret_isbn.style.format({"Montant_net":"{:,.0f} €","Ventes_net":"{:,.0f} €","% retours":"{:.2f} %"}))
 
         if not df_remises.empty:
             st.subheader("Remises par ISBN")
-            rem_isbn = df_remises.groupby("Code_Analytique", as_index=False).apply(lambda x: (x["Débit"]-x["Crédit"]).sum())
-            rem_isbn.columns = ["Code_Analytique", "Montant_remise"]
-            st.dataframe(rem_isbn)
+            rem_isbn = df_remises.groupby("Code_Analytique", as_index=False).agg({"Montant_net":"sum"})
+            rem_isbn["Montant_net"] = rem_isbn["Montant_net"].abs()
+            ventes_isbn = df_ventes.groupby("Code_Analytique", as_index=False).agg({"Montant_net":"sum"})
+            ventes_isbn.rename(columns={"Montant_net":"Ventes_net"}, inplace=True)
+            rem_isbn = rem_isbn.merge(ventes_isbn, on="Code_Analytique", how="left")
+            rem_isbn["% remises"] = rem_isbn["Montant_net"] / rem_isbn["Ventes_net"] * 100
+            st.dataframe(rem_isbn.style.format({"Montant_net":"{:,.0f} €","Ventes_net":"{:,.0f} €","% remises":"{:.2f} %"}))
+
+        # --- Tendance mensuelle ---
+        if "Date" in df.columns:
+            st.subheader("Tendance mensuelle des retours")
+            df_ret["Mois"] = df_ret["Date"].dt.to_period("M")
+            trend = df_ret.groupby("Mois", as_index=False)["Montant_net"].sum()
+            trend["Montant_net"] = trend["Montant_net"].abs()
+            fig_trend = px.bar(trend, x="Mois", y="Montant_net", title="Montant des retours par mois", labels={"Montant_net":"Montant retours"})
+            st.plotly_chart(fig_trend, use_container_width=True)
 # =====================
 # CASH EDITION
 # =====================
