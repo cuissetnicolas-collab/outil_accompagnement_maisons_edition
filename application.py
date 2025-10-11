@@ -224,20 +224,33 @@ elif page == "RETURNS EDITION":
 
         # Retours : solde par ISBN
         df_ret = df[df["Compte"].astype(str).str[:len(comptes_retours[0])].isin(comptes_retours)] if comptes_retours else pd.DataFrame()
+        df_ret["Solde"] = df_ret["Crédit"] - df_ret["Débit"]
+        total_retours = df_ret["Solde"].sum() if not df_ret.empty else 0
+
+        # Remises : solde par ISBN
+        df_remises = df[df["Compte"].astype(str).str[:len(comptes_remises[0])].isin(comptes_remises)] if comptes_remises else pd.DataFrame()
+        df_remises["Solde"] = df_remises["Crédit"] - df_remises["Débit"]
+        total_remises = df_remises["Solde"].sum() if not df_remises.empty else 0
+
+        # Affichage récapitulatif global
+        st.subheader("📋 Récapitulatif global")
+        recap = pd.DataFrame({
+            "Indicateur":["Total retours","Total remises"],
+            "Montant":[total_retours,total_remises]
+        })
+        st.dataframe(recap.style.format({"Montant":"{:,.0f} €"}))
+
+        # Affichage détail par ISBN
         if not df_ret.empty:
-            df_ret["Solde"] = df_ret["Crédit"] - df_ret["Débit"]
             ret_isbn = df_ret.groupby("Code_Analytique", as_index=False)["Solde"].sum().sort_values("Solde", ascending=False)
-            st.subheader("📊 Retours par ISBN (solde Crédit-Débit)")
+            st.subheader("📊 Retours par ISBN")
             st.dataframe(ret_isbn)
         else:
             st.info("Aucun retour détecté selon vos comptes paramétrés.")
 
-        # Remises : solde par ISBN
-        df_remises = df[df["Compte"].astype(str).str[:len(comptes_remises[0])].isin(comptes_remises)] if comptes_remises else pd.DataFrame()
         if not df_remises.empty:
-            df_remises["Solde"] = df_remises["Crédit"] - df_remises["Débit"]
             rem_isbn = df_remises.groupby("Code_Analytique", as_index=False)["Solde"].sum().sort_values("Solde", ascending=False)
-            st.subheader("📊 Remises libraires par ISBN (solde Crédit-Débit)")
+            st.subheader("📊 Remises libraires par ISBN")
             st.dataframe(rem_isbn)
         else:
             st.info("Aucune remise détectée selon vos comptes paramétrés.")
