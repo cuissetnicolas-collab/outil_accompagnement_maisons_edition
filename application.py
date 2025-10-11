@@ -213,47 +213,68 @@ elif page == "RETURNS EDITION":
     if "df_pivot" not in st.session_state:
         st.warning("⚠️ Générer d'abord le SOCLE EDITION.")
     else:
+        df = st.session_state["df_pivot"].copy()
         param = st.session_state.get("param_comptes", {})
-        st.info("⚠️ Assurez-vous que vos libellés ou comptes retours, ventes et remises sont bien paramétrés.")
+
+        st.info("⚠️ Assurez-vous que vos comptes ou libellés retours, ventes et remises sont correctement paramétrés.")
+
+        # Paramètres
         comptes_ventes = param.get("ventes", [])
         comptes_retours = param.get("retours", [])
         comptes_remises = param.get("remises", [])
-        
-        # Filtrer SOCLE
-        df = st.session_state["df_pivot"].copy()
+        col_libelle = st.text_input("Colonne Libellé (optionnel pour distinguer Retours/Remises)", value="Libellé")
 
-        # Retours : solde par ISBN
-        df_ret = df[df["Compte"].astype(str).str[:len(comptes_retours[0])].isin(comptes_retours)] if comptes_retours else pd.DataFrame()
+        use_libelle = col_libelle in df.columns
+
+        # --- FILTRAGE ---
+        def filtre_compte(df, prefix_list):
+            if not prefix_list: 
+                return pd.DataFrame()
+            mask = df["Compte"].astype(str).str.startswith(tuple(prefix_list))
+            return df[mask]
+
+        # Retours
+        df_ret = filtre_compte(df, comptes_retours)
+        if use_libelle:
+            df_ret = df_ret[df_ret[col_libelle].str.contains("Retour", case=False, na=False)]
         df_ret["Solde"] = df_ret["Crédit"] - df_ret["Débit"]
-        total_retours = df_ret["Solde"].sum() if not df_ret.empty else 0
 
-        # Remises : solde par ISBN
-        df_remises = df[df["Compte"].astype(str).str[:len(comptes_remises[0])].isin(comptes_remises)] if comptes_remises else pd.DataFrame()
+        # Remises
+        df_remises = filtre_compte(df, comptes_remises)
+        if use_libelle:
+            df_remises = df_remises[df_remises[col_libelle].str.contains("Remise", case=False, na=False)]
         df_remises["Solde"] = df_remises["Crédit"] - df_remises["Débit"]
+
+        # Ventes
+        df_ventes = filtre_compte(df, comptes_ventes)
+        df_ventes["Solde"] = df_ventes["Crédit"] - df_ventes["Débit"]
+
+        # --- INDICATEURS ---
+        st.subheader("📊 Indicateurs Retours / Remises")
+        total_retours = df_ret["Solde"].sum() if not df_ret.empty else 0
         total_remises = df_remises["Solde"].sum() if not df_remises.empty else 0
+        total_ventes = df_ventes["Solde"].sum() if not df_ventes.empty else 0
+        provision_retours = df[df["Compte"].astype(str).str.startswith("681")]["Débit"].sum()
 
-        # Affichage récapitulatif global
-        st.subheader("📋 Récapitulatif global")
-        recap = pd.DataFrame({
-            "Indicateur":["Total retours","Total remises"],
-            "Montant":[total_retours,total_remises]
-        })
-        st.dataframe(recap.style.format({"Montant":"{:,.0f} €"}))
+        st.metric("Total ventes (brut)", f"{total_ventes:,.0f} €")
+        st.metric("Total retours", f"{total_retours:,.0f} €")
+        st.metric("Total remises", f"{total_remises:,.0f} €")
+        st.metric("Provision retours (681)", f"{provision_retours:,.0f} €")
 
-        # Affichage détail par ISBN
+        # --- Détail par ISBN ---
         if not df_ret.empty:
-            ret_isbn = df_ret.groupby("Code_Analytique", as_index=False)["Solde"].sum().sort_values("Solde", ascending=False)
-            st.subheader("📊 Retours par ISBN")
+            st.subheader("Retours par ISBN")
+            ret_isbn = df_ret.groupby("Code_Analytique", as_index=False).agg({"Solde":"sum"})
             st.dataframe(ret_isbn)
         else:
-            st.info("Aucun retour détecté selon vos comptes paramétrés.")
+            st.info("Aucun retour détecté selon vos comptes/libellés paramétrés.")
 
         if not df_remises.empty:
-            rem_isbn = df_remises.groupby("Code_Analytique", as_index=False)["Solde"].sum().sort_values("Solde", ascending=False)
-            st.subheader("📊 Remises libraires par ISBN")
+            st.subheader("Remises par ISBN")
+            rem_isbn = df_remises.groupby("Code_Analytique", as_index=False).agg({"Solde":"sum"})
             st.dataframe(rem_isbn)
         else:
-            st.info("Aucune remise détectée selon vos comptes paramétrés.")
+            st.info("Aucune remise détectée selon vos comptes/libellés paramétrés.")
 # =====================
 # CASH EDITION
 # =====================
