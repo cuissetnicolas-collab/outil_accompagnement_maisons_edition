@@ -85,50 +85,69 @@ if page == "DATA EDITION":
 # =====================
 elif page == "SOCLE EDITION":
     st.header("🛠️ SOCLE EDITION - Génération du pivot analytique")
+    
     if "df_comptables" not in st.session_state:
         st.warning("⚠️ Importer d'abord les données via DATA EDITION.")
     else:
         df = st.session_state["df_comptables"].copy()
         st.subheader("Mapping des colonnes")
         columns = list(df.columns)
+        
         compte_col = st.selectbox("Colonne des comptes", columns)
         debit_col = st.selectbox("Colonne Débit", columns)
         credit_col = st.selectbox("Colonne Crédit", columns)
-        famille_col = st.selectbox("Colonne Famille analytique (optionnel)", [""]+columns)
-        code_col = st.selectbox("Colonne Code analytique / ISBN (optionnel)", [""]+columns)
+        famille_col = st.selectbox("Colonne Famille analytique (optionnel)", [""] + columns)
+        code_col = st.selectbox("Colonne Code analytique / ISBN (optionnel)", [""] + columns)
         date_col = st.selectbox("Colonne Date", columns)
+        libelle_col = st.selectbox("Colonne Libellé (optionnel)", [""] + columns)
 
         st.subheader("Paramétrage des comptes clés")
         ventes_comptes = st.text_input("Numéros de comptes ventes (séparés par virgule)", value="701")
-        retours_comptes = st.text_input("Numéros de comptes retours", value="709000000")
-        remises_comptes = st.text_input("Numéros de comptes remises", value="709100000")
+        retours_comptes = st.text_input("Numéros de comptes retours", value="709")
+        remises_comptes = st.text_input("Numéros de comptes remises", value="7091")
         charges_comptes = st.text_input("Numéros de comptes charges fixes", value="6")
 
         st.subheader("Charges fixes imputées")
         charges_imputees = st.radio("Les charges fixes ont-elles déjà été imputées par section ?", ["Oui", "Non"])
 
         if st.button("Générer le SOCLE"):
-            mapping = {compte_col:"Compte", debit_col:"Débit", credit_col:"Crédit"}
-            if famille_col!="": mapping[famille_col]="Famille_Analytique"
-            if code_col!="": mapping[code_col]="Code_Analytique"
-            mapping[date_col]="Date"
+            # Mapping des colonnes
+            mapping = {compte_col: "Compte", debit_col: "Débit", credit_col: "Crédit"}
+            if famille_col != "": mapping[famille_col] = "Famille_Analytique"
+            if code_col != "": mapping[code_col] = "Code_Analytique"
+            if libelle_col != "": mapping[libelle_col] = "Libellé"
+            mapping[date_col] = "Date"
+
             df.rename(columns=mapping, inplace=True)
-            for col in ["Famille_Analytique","Code_Analytique"]:
-                if col not in df.columns: df[col]=""
-                else: df[col]=df[col].fillna("")
-            df["Date"]=pd.to_datetime(df["Date"], errors="coerce")
-            pivot = df.groupby(["Compte","Famille_Analytique","Code_Analytique","Date"], as_index=False).agg({"Débit":"sum","Crédit":"sum"})
-            st.session_state["df_pivot"]=pivot
+
+            for col in ["Famille_Analytique", "Code_Analytique", "Libellé"]:
+                if col not in df.columns:
+                    df[col] = ""
+                else:
+                    df[col] = df[col].fillna("")
+
+            df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
+
+            # Génération du pivot
+            group_cols = ["Compte", "Famille_Analytique", "Code_Analytique", "Date"]
+            if "Libellé" in df.columns:
+                group_cols.append("Libellé")
+
+            pivot = df.groupby(group_cols, as_index=False).agg({"Débit": "sum", "Crédit": "sum"})
+
+            # Stockage dans session
+            st.session_state["df_pivot"] = pivot
             st.session_state["param_comptes"] = {
-                "ventes":[c.strip() for c in ventes_comptes.split(",")],
-                "retours":[c.strip() for c in retours_comptes.split(",")],
-                "remises":[c.strip() for c in remises_comptes.split(",")],
-                "charges":[c.strip() for c in charges_comptes.split(",")],
+                "ventes": [c.strip() for c in ventes_comptes.split(",")],
+                "retours": [c.strip() for c in retours_comptes.split(",")],
+                "remises": [c.strip() for c in remises_comptes.split(",")],
+                "charges": [c.strip() for c in charges_comptes.split(",")],
                 "charges_imputees": charges_imputees
             }
+
             st.success("✅ SOCLE EDITION généré et paramétré.")
             st.dataframe(pivot.head(20))
-            st.info("ℹ️ Note : assurez-vous que les colonnes et comptes sont correctement renseignés pour votre logiciel.")
+            st.info("ℹ️ Note : assurez-vous que les colonnes, libellés et comptes sont correctement renseignés pour votre logiciel.")
 
 # =====================
 # VISION EDITION
