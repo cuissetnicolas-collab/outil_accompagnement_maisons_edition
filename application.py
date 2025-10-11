@@ -234,36 +234,61 @@ elif page == "RETURNS EDITION":
             st.warning("⚠️ Veuillez définir les comptes retours et remises dans SOCLE EDITION (ex: 709000000, 709100000).")
             st.stop()
 
-        # Nettoyage
-        df["Compte"] = df["Compte"].astype(str).str.strip()
+        # =====================
+        # 🧹 Nettoyage et normalisation des comptes
+        # =====================
+        df["Compte"] = (
+            df["Compte"]
+            .astype(str)
+            .str.replace(r"\.0$", "", regex=True)  # supprime le .0 si Excel a converti en float
+            .str.replace(r"\s+", "", regex=True)   # supprime les espaces
+        )
+
+        # Si les comptes sont numériques (ex: 7090 ou 7091), on les complète à 9 chiffres
+        df["Compte"] = df["Compte"].apply(lambda x: x.zfill(9) if x.isdigit() else x)
+
         df["Débit"] = pd.to_numeric(df["Débit"], errors="coerce").fillna(0)
         df["Crédit"] = pd.to_numeric(df["Crédit"], errors="coerce").fillna(0)
 
-        # Calcul du chiffre d'affaires brut (soldes des comptes de ventes)
+        # =====================
+        # 🔍 Vérification des comptes détectés
+        # =====================
+        st.write("Comptes trouvés dans le fichier :", sorted(df["Compte"].unique())[:50])
+        st.info(f"Comptes utilisés - Retours : {comptes_retours} | Remises : {comptes_remises}")
+
+        # =====================
+        # 💰 Calculs des indicateurs
+        # =====================
+
+        # --- CA Brut (ventes)
         df_ventes = df[df["Compte"].isin(comptes_ventes)]
         ca_brut = (df_ventes["Crédit"].sum() - df_ventes["Débit"].sum()) if not df_ventes.empty else 0
 
-        # Calcul des retours (comptes paramétrés pour retours)
+        # --- Retours
         df_retours = df[df["Compte"].isin(comptes_retours)]
         total_retours = (df_retours["Débit"].sum() - df_retours["Crédit"].sum()) if not df_retours.empty else 0
 
-        # Calcul des remises (comptes paramétrés pour remises)
+        # --- Remises
         df_remises = df[df["Compte"].isin(comptes_remises)]
         total_remises = (df_remises["Débit"].sum() - df_remises["Crédit"].sum()) if not df_remises.empty else 0
 
-        # Affichage des indicateurs
-        st.metric("💰 CA Brut", f"{ca_brut:,.0f} €")
+        # =====================
+        # 📊 Affichage
+        # =====================
+        st.metric("💰 Chiffre d'affaires brut", f"{ca_brut:,.0f} €")
         st.metric("📦 Retours", f"{total_retours:,.0f} €")
         st.metric("🏷️ Remises libraires", f"{total_remises:,.0f} €")
 
-        # Détail par ISBN pour les retours
+        # =====================
+        # 📚 Détail des retours par ISBN
+        # =====================
         if not df_retours.empty:
             top_retours = (
                 df_retours.groupby("Code_Analytique", as_index=False)["Débit"]
                 .sum()
                 .sort_values("Débit", ascending=False)
             )
-            st.subheader("📚 Détail des retours par ISBN")
+            st.subheader("Détail des retours par ISBN")
             st.dataframe(top_retours)
         else:
             st.info("Aucun retour détecté pour les comptes spécifiés.")
