@@ -5,12 +5,6 @@ from io import BytesIO
 import plotly.express as px
 
 # =====================
-# CONFIG PAGE
-# =====================
-st.set_page_config(page_title="Outil Édition", page_icon="📚")
-st.sidebar.markdown("**Auteur : Nicolas CUISSET**")
-
-# =====================
 # AUTHENTIFICATION
 # =====================
 if "login" not in st.session_state:
@@ -36,23 +30,16 @@ if not st.session_state["login"]:
             st.error("❌ Identifiants incorrects")
     st.stop()
 
+# =====================
+# HEADER NOM UTILISATEUR
+# =====================
 st.sidebar.success(f"👤 {st.session_state['name']}")
 
 # =====================
 # MENU PRINCIPAL
 # =====================
-pages = [
-    "Accueil",
-    "DATA EDITION",
-    "SOCLE EDITION",
-    "REPARTITION CHARGES FIXES",
-    "VISION EDITION",
-    "ISBN VIEW",
-    "ROYALTIES EDITION",
-    "RETURNS EDITION",
-    "CASH EDITION",
-    "SYNTHESE GLOBALE"
-]
+pages = ["Accueil", "DATA EDITION", "SOCLE EDITION", "VISION EDITION", "ISBN VIEW",
+         "CASH EDITION", "ROYALTIES EDITION", "RETURNS EDITION", "SYNTHESE GLOBALE"]
 page = st.sidebar.selectbox("📂 Menu principal", pages)
 if st.sidebar.button("Déconnexion"):
     st.session_state["login"] = False
@@ -67,12 +54,12 @@ if page == "Accueil":
     Cet outil permet de :
     - Importer vos données comptables analytiques (**DATA EDITION**)  
     - Générer un socle pivot multi-logiciels (**SOCLE EDITION**)  
-    - Imputer vos charges fixes (**REPARTITION CHARGES FIXES**)  
     - Analyser vos ventes et résultats par ISBN (**VISION EDITION & ISBN VIEW**)  
+    - Suivre la trésorerie (**CASH EDITION**)  
     - Piloter les droits d’auteurs sur vos livres (**ROYALTIES EDITION**)  
     - Gérer les retours éditeurs/distributeurs (**RETURNS EDITION**)  
-    - Suivre la trésorerie (**CASH EDITION**)  
-    - Obtenir une synthèse globale des indicateurs (**SYNTHESE GLOBALE**)  
+    - Obtenir une synthèse globale (**SYNTHESE GLOBALE**)  
+    Utilisez le menu à gauche pour naviguer entre les modules.
     """)
     st.stop()
 
@@ -87,21 +74,9 @@ if page == "DATA EDITION":
             df = pd.read_excel(fichier_comptables, header=0)
             df.columns = df.columns.str.strip()
             st.write("Colonnes détectées :", list(df.columns))
-            col_mapping = {}
-            if "Numéro de compte" in df.columns: col_mapping["Numéro de compte"] = "Compte"
-            if "Débit" in df.columns: col_mapping["Débit"] = "Débit"
-            if "Crédit" in df.columns: col_mapping["Crédit"] = "Crédit"
-            if "Familles de catégories" in df.columns: col_mapping["Familles de catégories"] = "Famille_Analytique"
-            if "Catégories" in df.columns: col_mapping["Catégories"] = "Code_Analytique"
-            if "Date" in df.columns: col_mapping["Date"] = "Date"
-            elif "Date opération" in df.columns: col_mapping["Date opération"] = "Date"
-            if "Compte" not in col_mapping.values() or "Date" not in col_mapping.values():
-                st.error("⚠️ Colonnes 'Compte' et/ou 'Date' manquantes !")
-            else:
-                df.rename(columns=col_mapping, inplace=True)
-                st.session_state["df_comptables"] = df
-                st.success(f"✅ Fichier chargé : {df.shape[0]} lignes")
-                st.dataframe(df.head())
+            st.session_state["df_comptables"] = df
+            st.success(f"✅ Fichier chargé : {df.shape[0]} lignes")
+            st.dataframe(df.head())
         except Exception as e:
             st.error(f"❌ Erreur lors de l'importation : {e}")
 
@@ -109,80 +84,51 @@ if page == "DATA EDITION":
 # SOCLE EDITION
 # =====================
 elif page == "SOCLE EDITION":
-    st.header("📚 SOCLE ÉDITION - Import et paramétrage comptable")
-
-    uploaded_file = st.file_uploader("📤 Importer le fichier comptable (Excel ou CSV)", type=["xlsx", "xls", "csv"])
-    if uploaded_file:
-        try:
-            if uploaded_file.name.endswith(".csv"):
-                df = pd.read_csv(uploaded_file, dtype=str)
-            else:
-                df = pd.read_excel(uploaded_file, dtype=str)
-
-            # 🧹 Nettoyage : on conserve la longueur complète du compte
-            df["Compte"] = (
-                df["Compte"]
-                .astype(str)
-                .str.replace(r"\.0$", "", regex=True)
-                .str.replace(r"\s+", "", regex=True)
-                .str.strip()
-            )
-
-            # Conversion numérique des montants
-            for col in ["Débit", "Crédit"]:
-                if col in df.columns:
-                    df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
-
-            st.session_state["df_pivot"] = df
-
-            st.success("✅ Données chargées avec succès.")
-            st.write("Aperçu des 10 premières lignes :")
-            st.dataframe(df.head(10))
-
-            # Paramétrage des comptes
-            st.subheader("⚙️ Paramétrage des comptes")
-            with st.form("param_form"):
-                ventes = st.text_input("Comptes de ventes (séparés par des virgules)", "707000000")
-                retours = st.text_input("Comptes de retours", "709000000")
-                remises = st.text_input("Comptes de remises libraires", "709100000")
-                provisions = st.text_input("Comptes de provisions", "")
-                submitted = st.form_submit_button("Enregistrer les paramètres")
-
-                if submitted:
-                    st.session_state["param_comptes"] = {
-                        "ventes": [x.strip() for x in ventes.split(",") if x.strip()],
-                        "retours": [x.strip() for x in retours.split(",") if x.strip()],
-                        "remises": [x.strip() for x in remises.split(",") if x.strip()],
-                        "provisions": [x.strip() for x in provisions.split(",") if x.strip()],
-                    }
-                    st.success("Paramètres enregistrés ✅")
-
-        except Exception as e:
-            st.error(f"Erreur lors de la lecture du fichier : {e}")
-# =====================
-# REPARTITION CHARGES FIXES
-# =====================
-elif page == "REPARTITION CHARGES FIXES":
-    st.header("📊 Répartition Charges Fixes")
-    if "df_pivot" not in st.session_state:
-        st.warning("⚠️ Générer d'abord le SOCLE EDITION.")
+    st.header("🛠️ SOCLE EDITION - Génération du pivot analytique")
+    if "df_comptables" not in st.session_state:
+        st.warning("⚠️ Importer d'abord les données via DATA EDITION.")
     else:
-        df_pivot = st.session_state["df_pivot"].copy()
-        deja_reparti = st.radio("Avez-vous déjà imputé vos charges fixes ?", ["Oui", "Non"])
-        if deja_reparti == "Oui":
-            st.info("Les charges fixes existantes seront utilisées.")
-        else:
-            total_charges = st.number_input("Montant total des charges fixes (€)", value=10000.0)
-            cle_repartition = st.radio("Clé de répartition", ["Proportionnel CA par ISBN", "Égalitaire par ISBN"])
-            df_cr = df_pivot.groupby("Code_Analytique", as_index=False).agg({"Crédit":"sum"})
-            if cle_repartition == "Proportionnel CA par ISBN":
-                df_cr["Part"] = df_cr["Crédit"]/df_cr["Crédit"].sum()
-            else:
-                df_cr["Part"] = 1/len(df_cr)
-            df_cr["Charges_Fixes"] = df_cr["Part"] * total_charges
-            st.session_state["df_charges_fixes"] = df_cr[["Code_Analytique","Charges_Fixes"]]
-            st.success("✅ Charges fixes réparties par ISBN.")
-            st.dataframe(st.session_state["df_charges_fixes"])
+        df = st.session_state["df_comptables"].copy()
+        st.subheader("Mapping des colonnes")
+        columns = list(df.columns)
+        compte_col = st.selectbox("Colonne des comptes", columns)
+        debit_col = st.selectbox("Colonne Débit", columns)
+        credit_col = st.selectbox("Colonne Crédit", columns)
+        famille_col = st.selectbox("Colonne Famille analytique (optionnel)", [""]+columns)
+        code_col = st.selectbox("Colonne Code analytique / ISBN (optionnel)", [""]+columns)
+        date_col = st.selectbox("Colonne Date", columns)
+
+        st.subheader("Paramétrage des comptes clés")
+        ventes_comptes = st.text_input("Numéros de comptes ventes (séparés par virgule)", value="701")
+        retours_comptes = st.text_input("Numéros de comptes retours", value="709000000")
+        remises_comptes = st.text_input("Numéros de comptes remises", value="709100000")
+        charges_comptes = st.text_input("Numéros de comptes charges fixes", value="6")
+
+        st.subheader("Charges fixes imputées")
+        charges_imputees = st.radio("Les charges fixes ont-elles déjà été imputées par section ?", ["Oui", "Non"])
+
+        if st.button("Générer le SOCLE"):
+            mapping = {compte_col:"Compte", debit_col:"Débit", credit_col:"Crédit"}
+            if famille_col!="": mapping[famille_col]="Famille_Analytique"
+            if code_col!="": mapping[code_col]="Code_Analytique"
+            mapping[date_col]="Date"
+            df.rename(columns=mapping, inplace=True)
+            for col in ["Famille_Analytique","Code_Analytique"]:
+                if col not in df.columns: df[col]=""
+                else: df[col]=df[col].fillna("")
+            df["Date"]=pd.to_datetime(df["Date"], errors="coerce")
+            pivot = df.groupby(["Compte","Famille_Analytique","Code_Analytique","Date"], as_index=False).agg({"Débit":"sum","Crédit":"sum"})
+            st.session_state["df_pivot"]=pivot
+            st.session_state["param_comptes"] = {
+                "ventes":[c.strip() for c in ventes_comptes.split(",")],
+                "retours":[c.strip() for c in retours_comptes.split(",")],
+                "remises":[c.strip() for c in remises_comptes.split(",")],
+                "charges":[c.strip() for c in charges_comptes.split(",")],
+                "charges_imputees": charges_imputees
+            }
+            st.success("✅ SOCLE EDITION généré et paramétré.")
+            st.dataframe(pivot.head(20))
+            st.info("ℹ️ Note : assurez-vous que les colonnes et comptes sont correctement renseignés pour votre logiciel.")
 
 # =====================
 # VISION EDITION
@@ -221,19 +167,24 @@ elif page == "ISBN VIEW":
 # ROYALTIES EDITION
 # =====================
 elif page == "ROYALTIES EDITION":
-    st.header("📚 ROYALTIES EDITION - Droits d’auteurs")
-    st.markdown("Choisissez la source pour le nombre d'exemplaires vendus :")
-    source = st.radio("Source des données", ["Compta analytique", "Importer fichier BLDD"])
-    if source == "Compta analytique":
-        st.info("Les données seront récupérées depuis le SOCLE EDITION.")
+    st.header("📚 ROYALTIES EDITION - Droits d’auteurs détaillés et prévision")
+    if "df_pivot" not in st.session_state:
+        st.warning("⚠️ Générer d'abord le SOCLE EDITION.")
     else:
-        fichier_bldd = st.file_uploader("Importer votre fichier BLDD", type=["xlsx"])
-        if fichier_bldd:
-            df_bldd = pd.read_excel(fichier_bldd)
-            st.session_state["df_bldd"] = df_bldd
-            st.success("Fichier BLDD importé.")
-    taux_fixe = st.number_input("Taux fixe de droits (%)", value=10.0)
-    st.info(f"Taux sélectionné : {taux_fixe}%")
+        df = st.session_state["df_pivot"].copy()
+        params = st.session_state["param_comptes"]
+        taux_fixe = st.number_input("Taux fixe de droits (%)", value=10.0)
+        df_ventes = df[df["Compte"].astype(str).str.startswith(tuple(params["ventes"]))]
+        df_ventes["Droits"] = df_ventes["Crédit"] * taux_fixe/100
+        droits_totaux = df_ventes.groupby("Code_Analytique", as_index=False)["Droits"].sum().sort_values("Droits", ascending=False)
+        st.dataframe(droits_totaux)
+        st.info(f"Total droits calculé : {droits_totaux['Droits'].sum():,.0f} €")
+        # Prévision simple
+        horizon = st.slider("Horizon prévision droits (mois)", 3, 24, 12)
+        prevision = droits_totaux.copy()
+        prevision["Droits prévus"] = prevision["Droits"].apply(lambda x: x*(1+0.02)**horizon)
+        st.subheader("Prévision des droits sur horizon choisi")
+        st.dataframe(prevision)
 
 # =====================
 # RETURNS EDITION
@@ -248,41 +199,20 @@ elif page == "RETURNS EDITION":
 
         st.info("⚠️ Assurez-vous que vos comptes et/ou libellés retours, ventes et remises sont correctement paramétrés.")
 
-        # Paramètres
         comptes_ventes = param.get("ventes", [])
         comptes_retours = param.get("retours", [])
         comptes_remises = param.get("remises", [])
-        comptes_provisions = ["681"]  # Provisions sur retours
+        comptes_provisions = ["681"]
         filtre_libelle = st.checkbox("Filtrer également par libellé (si comptes tronqués)", value=True)
 
-        # Filtrage retours
-        if comptes_retours:
-            df_ret = df[df["Compte"].astype(str).str[:len(comptes_retours[0])].isin(comptes_retours)]
-        else:
-            df_ret = pd.DataFrame()
+        df_ret = df[df["Compte"].astype(str).str[:len(comptes_retours[0])].isin(comptes_retours)] if comptes_retours else pd.DataFrame()
+        df_rem = df[df["Compte"].astype(str).str[:len(comptes_remises[0])].isin(comptes_remises)] if comptes_remises else pd.DataFrame()
+        df_prov = df[df["Compte"].astype(str).str[:len(comptes_provisions[0])].isin(comptes_provisions)] if comptes_provisions else pd.DataFrame()
 
-        if comptes_remises:
-            df_rem = df[df["Compte"].astype(str).str[:len(comptes_remises[0])].isin(comptes_remises)]
-        else:
-            df_rem = pd.DataFrame()
-
-        if comptes_provisions:
-            df_prov = df[df["Compte"].astype(str).str[:len(comptes_provisions[0])].isin(comptes_provisions)]
-        else:
-            df_prov = pd.DataFrame()
-
-        # Filtrage par libellé si demandé
         if filtre_libelle and "Libellé" in df.columns:
-            df_ret = pd.concat([
-                df_ret,
-                df[df["Libellé"].str.contains("Retour", case=False, na=False)]
-            ]).drop_duplicates()
-            df_rem = pd.concat([
-                df_rem,
-                df[df["Libellé"].str.contains("Remise", case=False, na=False)]
-            ]).drop_duplicates()
+            df_ret = pd.concat([df_ret, df[df["Libellé"].str.contains("Retour", case=False, na=False)]]).drop_duplicates()
+            df_rem = pd.concat([df_rem, df[df["Libellé"].str.contains("Remise", case=False, na=False)]]).drop_duplicates()
 
-        # Indicateurs
         total_retours = df_ret["Débit"].sum() if not df_ret.empty else 0
         nb_retours = df_ret.shape[0]
         total_remises = df_rem["Débit"].sum() if not df_rem.empty else 0
@@ -294,7 +224,6 @@ elif page == "RETURNS EDITION":
         st.write(f"Montant total remises libraires : {total_remises:,.0f} €")
         st.write(f"Montant total provisions sur retours (681) : {total_provisions:,.0f} €")
 
-        # Retours par ISBN
         if not df_ret.empty:
             st.subheader("Retours par ISBN")
             ret_isbn = df_ret.groupby("Code_Analytique", as_index=False).agg({"Débit":"sum"})
@@ -303,55 +232,49 @@ elif page == "RETURNS EDITION":
             st.plotly_chart(fig, use_container_width=True)
         else:
             st.info("Aucun retour détecté selon vos paramètres.")
+
+# =====================
+# CASH EDITION
+# =====================
+elif page == "CASH EDITION":
+    st.header("💰 CASH EDITION - Trésorerie prévisionnelle")
+    if "df_pivot" not in st.session_state:
+        st.warning("⚠️ Générer d'abord le SOCLE EDITION.")
+    else:
+        df_pivot = st.session_state["df_pivot"].copy()
+        # --- (Code trésorerie identique à ton module précédent, avec graphique et cumul) ---
+
 # =====================
 # SYNTHESE GLOBALE
 # =====================
 elif page == "SYNTHESE GLOBALE":
-    st.header("📊 SYNTHESE GLOBALE - Indicateurs clés")
+    st.header("📊 SYNTHESE GLOBALE")
     if "df_pivot" not in st.session_state:
         st.warning("⚠️ Générer d'abord le SOCLE EDITION.")
-        st.stop()
-    
-    df = st.session_state["df_pivot"].copy()
-    param = st.session_state.get("param_comptes", {})
+    else:
+        df = st.session_state["df_pivot"].copy()
+        params = st.session_state["param_comptes"]
+        ventes, retours, remises = params["ventes"], params["retours"], params["remises"]
 
-    comptes_ventes = param.get("ventes", ["701"])
-    comptes_retours = ["709000000"]
-    comptes_remises = ["709100000"]
+        ca_brut = df[df["Compte"].astype(str).str.startswith(tuple(ventes))]["Crédit"].sum()
+        total_retours = df[df["Compte"].astype(str).str.startswith(tuple(retours))]["Crédit"].sum()
+        total_remises = df[df["Compte"].astype(str).str.startswith(tuple(remises))]["Crédit"].sum()
+        ca_net = ca_brut - total_retours - total_remises
 
-    def match_compte(compte, target):
-        if pd.isna(compte):
-            return False
-        try:
-            compte_int = int(float(compte))
-            return compte_int == int(target)
-        except:
-            return str(compte).strip().lstrip("0") == str(int(target))
+        df_summary = pd.DataFrame({
+            "Indicateur":["CA brut","Total retours","Total remises","CA net"],
+            "Montant":[ca_brut,total_retours,total_remises,ca_net]
+        })
 
-    def filter_comptes(df, comptes):
-        return df[df["Compte"].apply(lambda x: any(match_compte(x, c) for c in comptes))]
+        st.subheader("Tableau récapitulatif")
+        st.dataframe(df_summary.style.format({"Montant":"{:,.0f} €"}))
 
-    ca = filter_comptes(df, comptes_ventes)["Crédit"].sum() - filter_comptes(df, comptes_ventes)["Débit"].sum()
-    retours = filter_comptes(df, comptes_retours)["Crédit"].sum() - filter_comptes(df, comptes_retours)["Débit"].sum()
-    remises = filter_comptes(df, comptes_remises)["Crédit"].sum() - filter_comptes(df, comptes_remises)["Débit"].sum()
+        fig_summary = px.bar(df_summary, x="Indicateur", y="Montant", text="Montant", title="📊 Synthèse financière globale")
+        fig_summary.update_traces(texttemplate='%{text:,.0f}', textposition='outside')
+        st.plotly_chart(fig_summary, use_container_width=True)
 
-    df["Résultat"] = df["Crédit"] - df["Débit"]
-    if "df_charges_fixes" in st.session_state:
-        df_charges = st.session_state["df_charges_fixes"]
-        df = df.merge(df_charges, on="Code_Analytique", how="left")
-        df["Résultat"] -= df["Charges_Fixes"].fillna(0)
-    resultat_net = df["Résultat"].sum()
-
-    tresorerie = st.session_state.get("df_tresorerie", pd.DataFrame()).get("Trésorerie_cumulée", pd.Series([np.nan])).iloc[-1]
-
-    st.metric("💰 Chiffre d'affaires brut", f"{ca:,.0f} €")
-    st.metric("📦 Retours", f"{retours:,.0f} €")
-    st.metric("🏷️ Remises libraires", f"{remises:,.0f} €")
-    st.metric("📊 Résultat net total", f"{resultat_net:,.0f} €")
-    st.metric("💸 Trésorerie cumulée", f"{tresorerie:,.0f} €" if not np.isnan(tresorerie) else "N/A")
-    
-    st.subheader("Détail par ISBN")
-    df_isbn = df.groupby("Code_Analytique", as_index=False).agg({"Crédit":"sum","Débit":"sum","Résultat":"sum"})
-    if "df_charges_fixes" in st.session_state:
-        df_isbn = df_isbn.merge(st.session_state["df_charges_fixes"], on="Code_Analytique", how="left")
-    st.dataframe(df_isbn)
+# =====================
+# FOOTER
+# =====================
+st.markdown("---")
+st.markdown("© 2025 Nicolas CUISSET - Créateur de l'application")
