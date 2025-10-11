@@ -327,7 +327,7 @@ elif page == "SYNTHESE GLOBALE":
         st.plotly_chart(fig_summary, use_container_width=True)
 
 # =====================
-# FOOTER
+# FOOTER / COPYRIGHT
 # =====================
 st.markdown("---")
 st.markdown("© 2025 Nicolas CUISSET - Créateur de l'application")
