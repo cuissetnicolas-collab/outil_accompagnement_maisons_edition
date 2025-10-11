@@ -218,43 +218,41 @@ elif page == "RETURNS EDITION":
 
         st.info("⚠️ Assurez-vous que vos comptes ou libellés retours, ventes et remises sont correctement paramétrés.")
 
-        # Paramètres
         comptes_ventes = param.get("ventes", [])
         comptes_retours = param.get("retours", [])
         comptes_remises = param.get("remises", [])
         col_libelle = st.text_input("Colonne Libellé (optionnel pour distinguer Retours/Remises)", value="Libellé")
-
         use_libelle = col_libelle in df.columns
 
         # --- FILTRAGE ---
-        def filtre_compte(df, prefix_list):
-            if not prefix_list: 
+        def filtre_compte_exact(df, comptes_list):
+            if not comptes_list: 
                 return pd.DataFrame()
-            mask = df["Compte"].astype(str).str.startswith(tuple(prefix_list))
+            mask = df["Compte"].astype(str).isin(comptes_list)
             return df[mask]
 
         # Retours
-        df_ret = filtre_compte(df, comptes_retours)
+        df_ret = filtre_compte_exact(df, comptes_retours)
         if use_libelle:
             df_ret = df_ret[df_ret[col_libelle].str.contains("Retour", case=False, na=False)]
-        df_ret["Solde"] = abs(df_ret["Crédit"] - df_ret["Débit"])
+        df_ret["Solde"] = abs(df_ret["Crédit"] - df_ret["Débit"])  # Retours toujours positifs
 
         # Remises
-        df_remises = filtre_compte(df, comptes_remises)
+        df_remises = filtre_compte_exact(df, comptes_remises)
         if use_libelle:
             df_remises = df_remises[df_remises[col_libelle].str.contains("Remise", case=False, na=False)]
-        df_remises["Solde"] = abs(df_remises["Crédit"] - df_remises["Débit"])
+        df_remises["Solde"] = df_remises["Crédit"] - df_remises["Débit"]  # Remises = solde réel
 
         # Ventes
-        df_ventes = filtre_compte(df, comptes_ventes)
-        df_ventes["Solde"] = abs(df_ventes["Crédit"] - df_ventes["Débit"])
+        df_ventes = filtre_compte_exact(df, comptes_ventes)
+        df_ventes["Solde"] = df_ventes["Crédit"] - df_ventes["Débit"]
 
         # --- INDICATEURS ---
         st.subheader("📊 Indicateurs Retours / Remises")
         total_retours = df_ret["Solde"].sum() if not df_ret.empty else 0
         total_remises = df_remises["Solde"].sum() if not df_remises.empty else 0
         total_ventes = df_ventes["Solde"].sum() if not df_ventes.empty else 0
-        provision_retours = abs(df[df["Compte"].astype(str).str.startswith("681")]["Débit"].sum())
+        provision_retours = df[df["Compte"].astype(str).str.startswith("681")]["Débit"].sum()
 
         st.metric("Total ventes (brut)", f"{total_ventes:,.0f} €")
         st.metric("Total retours", f"{total_retours:,.0f} €")
