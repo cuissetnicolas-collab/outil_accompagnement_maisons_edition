@@ -210,6 +210,7 @@ elif page == "ROYALTIES EDITION":
 # =====================
 elif page == "RETURNS EDITION":
     st.header("📦 RETURNS EDITION - Gestion des retours")
+    
     if "df_pivot" not in st.session_state:
         st.warning("⚠️ Générer d'abord le SOCLE EDITION.")
     else:
@@ -224,10 +225,9 @@ elif page == "RETURNS EDITION":
         comptes_remises = param.get("remises", [])
         col_libelle = st.text_input("Colonne Libellé (optionnel pour distinguer Retours/Remises)", value="Libellé")
 
-        # Vérifie si la colonne libellé existe
         use_libelle = col_libelle in df.columns
 
-        # --- FILTRAGE ---
+        # --- FILTRAGE ET CALCUL NET ---
         def filtre_compte(df_compte, prefix_list, libelle_filtre=None):
             if not prefix_list:
                 return pd.DataFrame()
@@ -236,71 +236,62 @@ elif page == "RETURNS EDITION":
                 df_filt = df_filt[df_filt[col_libelle].str.contains(libelle_filtre, case=False, na=False)]
             if not df_filt.empty:
                 df_filt["Montant_net"] = df_filt["Débit"] - df_filt["Crédit"]
-                df_filt["Montant_net"] = df_filt["Montant_net"].abs()  # valeur positive
-                df_filt["Mois"] = df_filt["Date"].dt.strftime("%Y-%m")  # pour tendances
+                df_filt["Mois"] = df_filt["Date"].dt.strftime("%Y-%m")
             return df_filt
 
-        # Retours / Remises / Ventes
+        # Filtrage
         df_ret = filtre_compte(df, comptes_retours, "Retour")
         df_remises = filtre_compte(df, comptes_remises, "Remise")
         df_ventes = filtre_compte(df, comptes_ventes)
 
         # Totaux
-        total_ventes = df_ventes["Montant_net"].sum() if not df_ventes.empty else 0
         total_retours = df_ret["Montant_net"].sum() if not df_ret.empty else 0
         total_remises = df_remises["Montant_net"].sum() if not df_remises.empty else 0
+        total_ventes = df_ventes["Montant_net"].sum() if not df_ventes.empty else 0
 
-        # Provision retours (681)
-        df_prov = df[df["Compte"].astype(str).str.startswith("681")].copy()
+        # Provision retours
+        df_prov = df[df["Compte"].astype(str).str.startswith("681")]
         if not df_prov.empty:
             df_prov["Montant_net"] = df_prov["Débit"] - df_prov["Crédit"]
-            df_prov["Montant_net"] = df_prov["Montant_net"].abs()
             provision_retours = df_prov["Montant_net"].sum()
         else:
             provision_retours = 0
 
-        # Taux de retour / remise
-        taux_retour = (total_retours / total_ventes * 100) if total_ventes != 0 else 0
-        taux_remise = (total_remises / total_ventes * 100) if total_ventes != 0 else 0
-
         # --- INDICATEURS ---
         st.subheader("📊 Indicateurs Retours / Remises")
-        st.metric("Total ventes (brut)", f"{total_ventes:,.0f} €")
-        st.metric("Total retours", f"{total_retours:,.0f} €")
-        st.metric("Total remises", f"{total_remises:,.0f} €")
-        st.metric("Provision retours (681)", f"{provision_retours:,.0f} €")
-        st.metric("Taux de retour", f"{taux_retour:.2f} %")
-        st.metric("Taux de remise", f"{taux_remise:.2f} %")
+        st.metric("Total ventes (brut)", f"{abs(total_ventes):,.0f} €")
+        st.metric("Total retours", f"{abs(total_retours):,.0f} €")
+        st.metric("Total remises", f"{abs(total_remises):,.0f} €")
+        st.metric("Provision retours (681)", f"{abs(provision_retours):,.0f} €")
 
         # --- Détail par ISBN ---
         if not df_ret.empty:
             st.subheader("Retours par ISBN")
-            ret_isbn = df_ret.groupby("Code_Analytique", as_index=False)["Montant_net"].sum()
+            ret_isbn = df_ret.groupby("Code_Analytique", as_index=False).agg({"Montant_net":"sum"})
+            ret_isbn["Montant_net"] = ret_isbn["Montant_net"].abs()
             st.dataframe(ret_isbn)
-        else:
-            st.info("Aucun retour détecté selon vos comptes/libellés paramétrés.")
 
         if not df_remises.empty:
             st.subheader("Remises par ISBN")
-            rem_isbn = df_remises.groupby("Code_Analytique", as_index=False)["Montant_net"].sum()
+            rem_isbn = df_remises.groupby("Code_Analytique", as_index=False).agg({"Montant_net":"sum"})
+            rem_isbn["Montant_net"] = rem_isbn["Montant_net"].abs()
             st.dataframe(rem_isbn)
-        else:
-            st.info("Aucune remise détectée selon vos comptes/libellés paramétrés.")
 
         # --- Tendance mensuelle ---
         if not df_ret.empty:
-            st.subheader("📈 Tendance mensuelle des retours")
+            st.subheader("Tendance mensuelle des retours")
             trend_ret = df_ret.groupby("Mois", as_index=False)["Montant_net"].sum()
-            fig_trend_ret = px.line(trend_ret, x="Mois", y="Montant_net", title="Évolution mensuelle des retours", markers=True)
-            fig_trend_ret.update_traces(texttemplate='%{y:,.0f}', textposition='top center')
-            st.plotly_chart(fig_trend_ret, use_container_width=True)
+            trend_ret["Montant_net"] = trend_ret["Montant_net"].abs()
+            fig_trend = px.bar(trend_ret, x="Mois", y="Montant_net", text="Montant_net",
+                               title="Montant des retours par mois", labels={"Montant_net":"Montant (€)"})
+            fig_trend.update_traces(texttemplate='%{text:,.0f}', textposition='outside')
+            st.plotly_chart(fig_trend, use_container_width=True)
 
-        if not df_remises.empty:
-            st.subheader("📈 Tendance mensuelle des remises")
-            trend_rem = df_remises.groupby("Mois", as_index=False)["Montant_net"].sum()
-            fig_trend_rem = px.line(trend_rem, x="Mois", y="Montant_net", title="Évolution mensuelle des remises", markers=True)
-            fig_trend_rem.update_traces(texttemplate='%{y:,.0f}', textposition='top center')
-            st.plotly_chart(fig_trend_rem, use_container_width=True)
+        # --- Taux de retour sur ventes ---
+        if not df_ventes.empty and total_ventes != 0:
+            taux_retour = abs(total_retours) / abs(total_ventes) * 100
+            st.subheader("📈 Taux de retour sur ventes")
+            st.metric("Taux de retour (%)", f"{taux_retour:.2f} %")
 # =====================
 # CASH EDITION
 # =====================
