@@ -254,12 +254,12 @@ elif page == "RETURNS EDITION":
         # Nettoyage des comptes
         df["Compte"] = df["Compte"].astype(str).str.strip()
 
-        # Filtrage exact des comptes
-        df_ret = df[df["Compte"].isin(comptes_retours)] if comptes_retours else pd.DataFrame()
-        df_rem = df[df["Compte"].isin(comptes_remises)] if comptes_remises else pd.DataFrame()
-        df_prov = df[df["Compte"].isin(comptes_provisions)] if comptes_provisions else pd.DataFrame()
+        # Filtrage par début de compte pour flexibilité
+        df_ret = pd.concat([df[df["Compte"].str.startswith(c)] for c in comptes_retours]) if comptes_retours else pd.DataFrame()
+        df_rem = pd.concat([df[df["Compte"].str.startswith(c)] for c in comptes_remises]) if comptes_remises else pd.DataFrame()
+        df_prov = pd.concat([df[df["Compte"].str.startswith(c)] for c in comptes_provisions]) if comptes_provisions else pd.DataFrame()
 
-        # Indicateurs retours
+        # Indicateurs globaux
         total_retours = df_ret["Débit"].sum() if not df_ret.empty else 0
         total_remises = df_rem["Débit"].sum() if not df_rem.empty else 0
         total_provisions = df_prov["Crédit"].sum() if not df_prov.empty else 0
