@@ -239,78 +239,72 @@ elif page == "ROYALTIES EDITION":
 # RETURNS EDITION
 # =====================
 elif page == "RETURNS EDITION":
-    st.header("📦 RETURNS EDITION - Retours & Remises")
-
+    st.header("📦 RETURNS EDITION - Gestion des retours")
+    
     if "df_pivot" not in st.session_state:
-        st.warning("⚠️ Veuillez d'abord générer le SOCLE ÉDITION.")
-        st.stop()
-
-    df = st.session_state["df_pivot"].copy()
-    param = st.session_state.get("param_comptes", {})
-
-    comptes_retours = param.get("retours", [])
-    comptes_remises = param.get("remises", [])
-
-    if not comptes_retours or not comptes_remises:
-        st.warning("⚠️ Paramétrez d'abord les comptes retours et remises dans le SOCLE ÉDITION.")
-        st.stop()
-
-    # Nettoyage des comptes
-    df["Compte"] = (
-        df["Compte"].astype(str)
-        .str.replace(r"\.0$", "", regex=True)
-        .str.replace(r"\s+", "", regex=True)
-        .str.strip()
-    )
-    df["Débit"] = pd.to_numeric(df["Débit"], errors="coerce").fillna(0)
-    df["Crédit"] = pd.to_numeric(df["Crédit"], errors="coerce").fillna(0)
-    df["Solde"] = df["Crédit"] - df["Débit"]  # 🔹 solde global
-
-    def filtrer_comptes(df, comptes_cibles):
-        comptes_cibles_nettoyés = [
-            c.replace(" ", "").replace(".0", "").strip() for c in comptes_cibles
-        ]
-        df["Compte_clean"] = (
-            df["Compte"].astype(str)
-            .str.replace(r"\.0$", "", regex=True)
-            .str.replace(r"\s+", "", regex=True)
-            .str.strip()
-        )
-        return df[df["Compte_clean"].isin(comptes_cibles_nettoyés)]
-
-    # Application du filtre
-    df_retours = filtrer_comptes(df, comptes_retours)
-    df_remises = filtrer_comptes(df, comptes_remises)
-
-    # Calculs
-    total_retours = df_retours["Solde"].sum() if not df_retours.empty else 0
-    total_remises = df_remises["Solde"].sum() if not df_remises.empty else 0
-
-    st.metric("📦 Retours (solde global du compte 709000000)", f"{total_retours:,.0f} €")
-    st.metric("🏷️ Remises libraires (solde global du compte 709100000)", f"{total_remises:,.0f} €")
-
-    # Détails
-    if not df_retours.empty:
-        st.subheader("📘 Détail des retours par code analytique")
-        detail_retours = (
-            df_retours.groupby("Code_Analytique", as_index=False)["Solde"]
-            .sum()
-            .sort_values("Solde", ascending=False)
-        )
-        st.dataframe(detail_retours)
+        st.warning("⚠️ Générer d'abord le SOCLE EDITION.")
     else:
-        st.info("Aucun retour détecté pour le compte 709000000.")
+        param = st.session_state.get("param_comptes", {})
+        st.info("ℹ️ Assurez-vous que les comptes retours, remises, ventes et provision sont correctement paramétrés.")
 
-    if not df_remises.empty:
-        st.subheader("📗 Détail des remises par code analytique")
-        detail_remises = (
-            df_remises.groupby("Code_Analytique", as_index=False)["Solde"]
-            .sum()
-            .sort_values("Solde", ascending=False)
-        )
-        st.dataframe(detail_remises)
-    else:
-        st.info("Aucune remise détectée pour le compte 709100000.")
+        df = st.session_state["df_pivot"].copy()
+        
+        # Comptes exacts
+        comptes_ventes = param.get("ventes", [])
+        comptes_retours = param.get("retours", [])
+        comptes_remises = param.get("remises", [])
+        comptes_provision = param.get("provision", ["681"])  # prévoir compte 681 pour les provisions
+
+        # Filtrage précis par compte
+        df_ret = df[df["Compte"].isin(comptes_retours)]
+        df_remises = df[df["Compte"].isin(comptes_remises)]
+        df_ventes = df[df["Compte"].isin(comptes_ventes)]
+        df_prov = df[df["Compte"].isin(comptes_provision)]
+
+        # --------------------
+        # Indicateurs par ISBN
+        # --------------------
+        if not df_ret.empty:
+            st.subheader("📊 Retours par ISBN")
+            ret_isbn = df_ret.groupby("Code_Analytique", as_index=False).agg({"Débit":"sum"})
+            ret_isbn.rename(columns={"Débit":"Montant_retour"}, inplace=True)
+            st.dataframe(ret_isbn)
+
+            st.subheader("📊 Remises libraires par ISBN")
+            rem_isbn = df_remises.groupby("Code_Analytique", as_index=False).agg({"Débit":"sum"})
+            rem_isbn.rename(columns={"Débit":"Montant_remise"}, inplace=True)
+            st.dataframe(rem_isbn)
+
+            st.subheader("📊 Provision sur retours (compte 681)")
+            prov_isbn = df_prov.groupby("Code_Analytique", as_index=False).agg({"Débit":"sum"})
+            prov_isbn.rename(columns={"Débit":"Montant_provision"}, inplace=True)
+            st.dataframe(prov_isbn)
+
+            # Fusion pour synthèse
+            df_indic = pd.merge(ret_isbn, rem_isbn, on="Code_Analytique", how="outer")
+            df_indic = pd.merge(df_indic, prov_isbn, on="Code_Analytique", how="outer")
+            df_indic = df_indic.fillna(0)
+            df_indic["Total_impact"] = df_indic["Montant_retour"] + df_indic["Montant_remise"] + df_indic["Montant_provision"]
+
+            st.subheader("📊 Synthèse par ISBN")
+            st.dataframe(df_indic.style.format({
+                "Montant_retour":"{:,.0f}",
+                "Montant_remise":"{:,.0f}",
+                "Montant_provision":"{:,.0f}",
+                "Total_impact":"{:,.0f}"
+            }))
+
+            # Totaux globaux
+            st.subheader("📊 Totaux globaux")
+            totaux = {
+                "Total retours": df_indic["Montant_retour"].sum(),
+                "Total remises": df_indic["Montant_remise"].sum(),
+                "Total provisions": df_indic["Montant_provision"].sum(),
+                "Total impact global": df_indic["Total_impact"].sum()
+            }
+            st.table(pd.DataFrame(totaux, index=[0]).T.rename(columns={0:"Montant"}).style.format({"Montant":"{:,.0f}"}))
+        else:
+            st.info("Aucun retour détecté selon vos comptes paramétrés.")
 # =====================
 # SYNTHESE GLOBALE
 # =====================
