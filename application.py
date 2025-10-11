@@ -245,46 +245,64 @@ elif page == "RETURNS EDITION":
     else:
         df = st.session_state["df_pivot"].copy()
         param = st.session_state.get("param_comptes", {})
+
+        st.info("⚠️ Assurez-vous que vos comptes et/ou libellés retours, ventes et remises sont correctement paramétrés.")
+
+        # Paramètres
+        comptes_ventes = param.get("ventes", [])
         comptes_retours = param.get("retours", [])
         comptes_remises = param.get("remises", [])
-        comptes_provisions = param.get("provisions", ["681"])  # par défaut 681 si non renseigné
+        comptes_provisions = ["681"]  # Provisions sur retours
+        filtre_libelle = st.checkbox("Filtrer également par libellé (si comptes tronqués)", value=True)
 
-        st.info("⚠️ Assurez-vous que vos comptes retours, remises et provisions sont correctement renseignés.")
+        # Filtrage retours
+        if comptes_retours:
+            df_ret = df[df["Compte"].astype(str).str[:len(comptes_retours[0])].isin(comptes_retours)]
+        else:
+            df_ret = pd.DataFrame()
 
-        # Nettoyage des comptes
-        df["Compte"] = df["Compte"].astype(str).str.strip()
+        if comptes_remises:
+            df_rem = df[df["Compte"].astype(str).str[:len(comptes_remises[0])].isin(comptes_remises)]
+        else:
+            df_rem = pd.DataFrame()
 
-        # Filtrage par début de compte pour flexibilité
-        df_ret = pd.concat([df[df["Compte"].str.startswith(c)] for c in comptes_retours]) if comptes_retours else pd.DataFrame()
-        df_rem = pd.concat([df[df["Compte"].str.startswith(c)] for c in comptes_remises]) if comptes_remises else pd.DataFrame()
-        df_prov = pd.concat([df[df["Compte"].str.startswith(c)] for c in comptes_provisions]) if comptes_provisions else pd.DataFrame()
+        if comptes_provisions:
+            df_prov = df[df["Compte"].astype(str).str[:len(comptes_provisions[0])].isin(comptes_provisions)]
+        else:
+            df_prov = pd.DataFrame()
 
-        # Indicateurs globaux
+        # Filtrage par libellé si demandé
+        if filtre_libelle and "Libellé" in df.columns:
+            df_ret = pd.concat([
+                df_ret,
+                df[df["Libellé"].str.contains("Retour", case=False, na=False)]
+            ]).drop_duplicates()
+            df_rem = pd.concat([
+                df_rem,
+                df[df["Libellé"].str.contains("Remise", case=False, na=False)]
+            ]).drop_duplicates()
+
+        # Indicateurs
         total_retours = df_ret["Débit"].sum() if not df_ret.empty else 0
+        nb_retours = df_ret.shape[0]
         total_remises = df_rem["Débit"].sum() if not df_rem.empty else 0
-        total_provisions = df_prov["Crédit"].sum() if not df_prov.empty else 0
+        total_provisions = df_prov["Débit"].sum() if not df_prov.empty else 0
 
-        st.subheader("📊 Indicateurs globaux")
-        df_indics = pd.DataFrame({
-            "Indicateur":["Total retours","Total remises","Provision sur retours"],
-            "Montant":[total_retours,total_remises,total_provisions]
-        })
-        st.dataframe(df_indics.style.format({"Montant":"{:,.0f} €"}))
+        st.subheader("📊 Indicateurs retours")
+        st.write(f"Montant total retours : {total_retours:,.0f} €")
+        st.write(f"Nombre de lignes retours : {nb_retours}")
+        st.write(f"Montant total remises libraires : {total_remises:,.0f} €")
+        st.write(f"Montant total provisions sur retours (681) : {total_provisions:,.0f} €")
 
         # Retours par ISBN
         if not df_ret.empty:
-            st.subheader("📈 Retours par ISBN")
-            df_ret_isbn = df_ret.groupby("Code_Analytique", as_index=False).agg({"Débit":"sum"})
-            df_ret_isbn = df_ret_isbn.rename(columns={"Débit":"Montant_retours"})
-            st.dataframe(df_ret_isbn.style.format({"Montant_retours":"{:,.0f} €"}))
-
-            # Graphique par ISBN
-            fig_ret = px.bar(df_ret_isbn, x="Code_Analytique", y="Montant_retours",
-                             title="Retours par ISBN", text="Montant_retours")
-            fig_ret.update_traces(texttemplate='%{text:,.0f}', textposition='outside')
-            st.plotly_chart(fig_ret, use_container_width=True)
+            st.subheader("Retours par ISBN")
+            ret_isbn = df_ret.groupby("Code_Analytique", as_index=False).agg({"Débit":"sum"})
+            st.dataframe(ret_isbn)
+            fig = px.bar(ret_isbn, x="Code_Analytique", y="Débit", title="Montant des retours par ISBN", labels={"Débit":"Montant retours"})
+            st.plotly_chart(fig, use_container_width=True)
         else:
-            st.info("Aucun retour détecté selon vos comptes paramétrés.")
+            st.info("Aucun retour détecté selon vos paramètres.")
 # =====================
 # SYNTHESE GLOBALE
 # =====================
