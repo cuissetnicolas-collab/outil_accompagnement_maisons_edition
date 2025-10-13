@@ -123,9 +123,9 @@ elif page == "SOCLE EDITION":
         💡 Bienvenue dans le module SOCLE EDITION !  
         Ici, vous allez pouvoir générer votre pivot analytique à partir des données importées.  
         Veuillez renseigner soigneusement :
-        - Les **colonnes correspondant à vos données analytiques** (comptes, débit, crédit, libellés, dates…)  
+        - Les **colonnes correspondant à vos données** (comptes, débit, crédit, libellés, dates…)  
         - Les **paramètres de comptes comptables** correspondant à votre logiciel pour les ventes, retours, remises et charges  
-        ⚠️ Ces informations permettront de générer correctement le socle et vos outils d'analyse ultérieurs.
+        ⚠️ Ces informations permettront de générer correctement le socle analytique et à générer vos outils d'analyse ultérieurs.
         """)
         
         st.subheader("Mapping des colonnes")
