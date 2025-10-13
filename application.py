@@ -81,16 +81,31 @@ if page == "Accueil":
 if page == "DATA EDITION":
     st.header("📂 DATA EDITION - Import des données analytiques")
     fichier_comptables = st.file_uploader("Sélectionnez votre fichier Excel", type=["xlsx"])
+
     if fichier_comptables:
         try:
             df = pd.read_excel(fichier_comptables, header=0)
             df.columns = df.columns.str.strip()
             st.write("Colonnes détectées :", list(df.columns))
             st.session_state["df_comptables"] = df
-            st.success(f"✅ Fichier chargé : {df.shape[0]} lignes")
+            st.success(f"✅ Fichier chargé avec succès ({df.shape[0]} lignes)")
+
             st.dataframe(df.head())
+
+            # 👉 Message d'étape suivante
+            st.info("""
+            ✅ Votre fichier a bien été importé !  
+            Prochaine étape : rendez-vous dans **SOCLE EDITION** pour :
+            - Sélectionner les colonnes (Compte, Débit, Crédit, etc.)  
+            - Paramétrer vos comptes (ventes, retours, remises, charges)  
+            - Et générer le **socle pivot analytique**.  
+            """)
+
         except Exception as e:
-            st.error(f"❌ Erreur lors de l'importation : {e}")
+            st.error(f"❌ Erreur lors de l'importation du fichier : {e}")
+
+    else:
+        st.warning("Veuillez importer un fichier Excel pour continuer.")
 
 # =====================
 # SOCLE EDITION
