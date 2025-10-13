@@ -117,6 +117,17 @@ elif page == "SOCLE EDITION":
         st.warning("⚠️ Importer d'abord les données via DATA EDITION.")
     else:
         df = st.session_state["df_comptables"].copy()
+        
+        # --- Message d'introduction ---
+        st.info("""
+        💡 Bienvenue dans le module SOCLE EDITION !  
+        Ici, vous allez pouvoir générer votre pivot analytique à partir des données importées.  
+        Veuillez renseigner soigneusement :
+        - Les **colonnes correspondant à vos données analytiques** (comptes, débit, crédit, libellés, dates…)  
+        - Les **paramètres de comptes comptables** correspondant à votre logiciel pour les ventes, retours, remises et charges  
+        ⚠️ Ces informations permettront de générer correctement le socle et vos outils d'analyse ultérieurs.
+        """)
+        
         st.subheader("Mapping des colonnes")
         columns = list(df.columns)
         
@@ -174,9 +185,6 @@ elif page == "SOCLE EDITION":
 
             st.success("✅ SOCLE EDITION généré et paramétré.")
             st.dataframe(pivot.head(20))
-            st.info("ℹ️ Note : assurez-vous que les colonnes, libellés et comptes sont correctement renseignés pour votre logiciel.")
-
-            # 👉 Nouveau message pédagogique pour guider vers les outils
             st.info("""
             🎯 Le socle pivot est prêt !  
             Vous pouvez maintenant générer et analyser vos données dans les modules suivants :
