@@ -9,45 +9,31 @@ import plotly.express as px
 # =====================
 if "login" not in st.session_state:
     st.session_state["login"] = False
-if "page" not in st.session_state:
-    st.session_state["page"] = "ACCUEIL"
 
 def login(username, password):
     users = {
-        "aurore": {"password": "12345", "name": "Aurore"},
-        "nicolas": {"password": "12345", "name": "Nicolas"}
+        "aurore": {"password": "12345", "name": "Aurore Demoulin"},
+        "laure.froidefond": {"password": "Laure2019$", "name": "Laure Froidefond"},
+        "Bruno": {"password": "Toto1963$", "name": "Toto El Gringo"}
     }
-    if username in users and users[username]["password"] == password:
+    if username in users and password == users[username]["password"]:
         st.session_state["login"] = True
         st.session_state["username"] = username
         st.session_state["name"] = users[username]["name"]
-        st.session_state["page"] = "ACCUEIL"  # ✅ Redirection automatique vers l'accueil
-        st.success(f"Bienvenue {st.session_state['name']} ! Redirection vers l'accueil...")
-    else:
-        st.error("Nom d'utilisateur ou mot de passe incorrect.")
+        return True
+    return False
 
-# --- Barre latérale de connexion ---
-if st.session_state["login"]:
-    # ✅ Vérification que 'name' existe avant d'afficher
-    if "name" in st.session_state:
-        st.sidebar.success(f"👤 {st.session_state['name']}")
-    else:
-        st.sidebar.info("🔒 Non connecté")
+if not st.session_state["login"]:
+    st.title("🔑 Connexion espace expert-comptable")
+    username_input = st.text_input("Identifiant")
+    password_input = st.text_input("Mot de passe", type="password")
+    if st.button("Connexion"):
+        if login(username_input, password_input):
+            st.success(f"Bienvenue {st.session_state['name']} 👋")
+        else:
+            st.error("❌ Identifiants incorrects")
+    st.stop()
 
-    # Bouton déconnexion
-    if st.sidebar.button("Se déconnecter"):
-        for key in ["login", "username", "name"]:
-            if key in st.session_state:
-                del st.session_state[key]
-        st.session_state["login"] = False
-        st.session_state["page"] = "ACCUEIL"  # ✅ Retour automatique à l'accueil après déconnexion
-        st.rerun()
-else:
-    st.sidebar.subheader("🔑 Connexion")
-    username = st.sidebar.text_input("Nom d'utilisateur")
-    password = st.sidebar.text_input("Mot de passe", type="password")
-    if st.sidebar.button("Se connecter"):
-        login(username, password)
 
 # =====================
 # HEADER NOM UTILISATEUR
