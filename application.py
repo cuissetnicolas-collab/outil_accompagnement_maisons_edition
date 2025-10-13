@@ -465,27 +465,50 @@ elif page == "CASH EDITION":
 # =====================
 elif page == "SYNTHESE GLOBALE":
     st.header("📊 SYNTHESE GLOBALE")
+    
     if "df_pivot" not in st.session_state:
         st.warning("⚠️ Générer d'abord le SOCLE EDITION.")
     else:
         df = st.session_state["df_pivot"].copy()
         params = st.session_state["param_comptes"]
         ventes, retours, remises = params["ventes"], params["retours"], params["remises"]
+        col_libelle = "Libellé"
+        use_libelle = col_libelle in df.columns
 
-        ca_brut = df[df["Compte"].astype(str).str.startswith(tuple(ventes))]["Crédit"].sum()
-        total_retours = df[df["Compte"].astype(str).str.startswith(tuple(retours))]["Crédit"].sum()
-        total_remises = df[df["Compte"].astype(str).str.startswith(tuple(remises))]["Crédit"].sum()
+        # --- FILTRAGE NET comme Returns Edition ---
+        def filtre_compte(df_compte, prefix_list, libelle_filtre=None):
+            if not prefix_list:
+                return pd.DataFrame()
+            df_filt = df_compte[df_compte["Compte"].astype(str).str.startswith(tuple(prefix_list))]
+            if use_libelle and libelle_filtre:
+                df_filt = df_filt[df_filt[col_libelle].str.contains(libelle_filtre, case=False, na=False)]
+            if not df_filt.empty:
+                df_filt["Montant_net"] = df_filt["Débit"] - df_filt["Crédit"]
+            return df_filt
+
+        # Filtrage
+        df_ret = filtre_compte(df, retours, "Retour")
+        df_rem = filtre_compte(df, remises, "Remise")
+        df_ventes = filtre_compte(df, ventes)
+
+        # Totaux
+        ca_brut = df_ventes["Montant_net"].sum() if not df_ventes.empty else 0
+        total_retours = df_ret["Montant_net"].sum() if not df_ret.empty else 0
+        total_remises = df_rem["Montant_net"].sum() if not df_rem.empty else 0
         ca_net = ca_brut - total_retours - total_remises
 
+        # Affichage tableau
         df_summary = pd.DataFrame({
-            "Indicateur":["CA brut","Total retours","Total remises","CA net"],
-            "Montant":[ca_brut,total_retours,total_remises,ca_net]
+            "Indicateur": ["CA brut", "Total retours", "Total remises", "CA net"],
+            "Montant": [ca_brut, total_retours, total_remises, ca_net]
         })
 
         st.subheader("Tableau récapitulatif")
         st.dataframe(df_summary.style.format({"Montant":"{:,.0f} €"}))
 
-        fig_summary = px.bar(df_summary, x="Indicateur", y="Montant", text="Montant", title="📊 Synthèse financière globale")
+        # Graphique
+        fig_summary = px.bar(df_summary, x="Indicateur", y="Montant", text="Montant",
+                             title="📊 Synthèse financière globale")
         fig_summary.update_traces(texttemplate='%{text:,.0f}', textposition='outside')
         st.plotly_chart(fig_summary, use_container_width=True)
 
