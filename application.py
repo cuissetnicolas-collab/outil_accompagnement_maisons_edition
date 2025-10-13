@@ -312,7 +312,7 @@ elif page == "RETURNS EDITION":
             fig_trend_rem.update_traces(texttemplate='%{text:,.0f}', textposition='outside')
             st.plotly_chart(fig_trend_rem, use_container_width=True)
 # =====================
-# CASH EDITION
+# CASH EDITION - Trésorerie prévisionnelle (intégrée)
 # =====================
 elif page == "CASH EDITION":
     st.header("💰 CASH EDITION - Trésorerie prévisionnelle")
@@ -320,7 +320,104 @@ elif page == "CASH EDITION":
         st.warning("⚠️ Générer d'abord le SOCLE EDITION.")
     else:
         df_pivot = st.session_state["df_pivot"].copy()
-        # --- (Code trésorerie identique à ton module précédent, avec graphique et cumul) ---
+
+        st.info("Module de prévision de trésorerie basé sur le SOCLE analytique.")
+
+        # Date de départ
+        date_debut = st.date_input("Date de départ de la trésorerie", pd.to_datetime("2025-04-01"))
+
+        # Nettoyage et conversions
+        df_pivot["Compte"] = df_pivot["Compte"].astype(str).str.strip()
+        df_pivot["Date"] = pd.to_datetime(df_pivot["Date"], errors="coerce")
+        df_pivot["Débit"] = pd.to_numeric(df_pivot["Débit"], errors="coerce").fillna(0)
+        df_pivot["Crédit"] = pd.to_numeric(df_pivot["Crédit"], errors="coerce").fillna(0)
+
+        # Calcul du solde de départ : comptes bancaires commençant par '5'
+        comptes_bancaires = df_pivot[df_pivot["Compte"].str.startswith("5")]
+        solde_depart_df = comptes_bancaires[comptes_bancaires["Date"] <= pd.to_datetime(date_debut)]
+        solde_depart_total = solde_depart_df["Crédit"].sum() - solde_depart_df["Débit"].sum()
+        st.info(f"Solde de départ (comptes '5' jusqu'à {date_debut}): {solde_depart_total:,.2f} €")
+
+        # Paramètres pour la prévision
+        horizon = st.slider("Horizon de projection (en mois)", 3, 36, 12)
+        croissance_ca = st.number_input("Croissance mensuelle du CA (%)", value=2.0, step=0.1) / 100
+        evolution_charges = st.number_input("Évolution mensuelle des charges (%)", value=1.0, step=0.1) / 100
+
+        # Préparation des flux : exclure les comptes bancaires (on projette les flux non bancaires)
+        df_flux = df_pivot[~df_pivot["Compte"].str.startswith("5")].copy()
+        df_flux = df_flux.dropna(subset=["Date"])
+        df_flux = df_flux[df_flux["Date"] >= pd.to_datetime(date_debut)]  # uniquement après la date de départ
+
+        if df_flux.empty:
+            st.warning("Aucun flux non bancaire détecté après la date de départ. Vérifiez votre socle ou la date de départ.")
+        else:
+            # Agrégation mensuelle
+            df_flux["Mois"] = df_flux["Date"].dt.to_period("M").astype(str)
+            flux_mensuel = df_flux.groupby("Mois").agg({"Débit": "sum", "Crédit": "sum"}).reset_index()
+            flux_mensuel["Solde_mensuel"] = flux_mensuel["Crédit"] - flux_mensuel["Débit"]
+            flux_mensuel = flux_mensuel.sort_values("Mois").reset_index(drop=True)
+
+            # Prévisions futures
+            dernier_mois = pd.Period(flux_mensuel["Mois"].max(), freq="M") if not flux_mensuel.empty else pd.Period(date_debut, freq="M")
+            previsions = []
+            # Valeurs de départ : on prend le dernier mois existant s'il y en a
+            ca_actuel = flux_mensuel["Crédit"].iloc[-1] if not flux_mensuel.empty else 0
+            charges_actuelles = flux_mensuel["Débit"].iloc[-1] if not flux_mensuel.empty else 0
+
+            for i in range(1, horizon + 1):
+                prochain_mois = (dernier_mois + i).strftime("%Y-%m")
+                ca_actuel = ca_actuel * (1 + croissance_ca)
+                charges_actuelles = charges_actuelles * (1 + evolution_charges)
+                solde_prevu = ca_actuel - charges_actuelles
+                previsions.append({
+                    "Mois": prochain_mois,
+                    "Débit": charges_actuelles,
+                    "Crédit": ca_actuel,
+                    "Solde_mensuel": solde_prevu
+                })
+
+            df_prev = pd.DataFrame(previsions)
+
+            # Concaténation historique + prévisions
+            df_tresorerie = pd.concat([flux_mensuel, df_prev], ignore_index=True, sort=False)
+            df_tresorerie["Trésorerie_cumulée"] = solde_depart_total + df_tresorerie["Solde_mensuel"].cumsum()
+
+            # Graphique
+            fig = px.line(
+                df_tresorerie,
+                x="Mois",
+                y="Trésorerie_cumulée",
+                title="📈 Évolution prévisionnelle de la trésorerie",
+                markers=True
+            )
+            fig.update_layout(xaxis_title="Mois", yaxis_title="Trésorerie (€)")
+            st.plotly_chart(fig, use_container_width=True)
+
+            # Détail mensuel formaté
+            st.subheader("📋 Détail mensuel (historique + prévisions)")
+            # Formatage colonne numérique avant affichage
+            df_display = df_tresorerie.copy()
+            for col in ["Débit", "Crédit", "Solde_mensuel", "Trésorerie_cumulée"]:
+                if col in df_display.columns:
+                    df_display[col] = pd.to_numeric(df_display[col], errors="coerce")
+            st.dataframe(df_display.style.format({
+                "Débit": "{:,.0f}",
+                "Crédit": "{:,.0f}",
+                "Solde_mensuel": "{:,.0f}",
+                "Trésorerie_cumulée": "{:,.0f}"
+            }))
+
+            # Téléchargement Excel
+            buffer = BytesIO()
+            with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+                df_display.to_excel(writer, index=False, sheet_name="Tresorerie_Previsions")
+            buffer.seek(0)
+            st.download_button(
+                label="📥 Télécharger prévisions trésorerie (Excel)",
+                data=buffer,
+                file_name="Previsions_Tresorerie.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
 
 # =====================
 # SYNTHESE GLOBALE
