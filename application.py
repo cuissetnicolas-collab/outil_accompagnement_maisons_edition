@@ -7,8 +7,12 @@ import plotly.express as px
 # =====================
 # AUTHENTIFICATION
 # =====================
+import streamlit as st
+
 if "login" not in st.session_state:
     st.session_state["login"] = False
+if "page" not in st.session_state:
+    st.session_state["page"] = "Accueil"  # page par défaut
 
 def login(username, password):
     users = {
@@ -20,18 +24,18 @@ def login(username, password):
         st.session_state["login"] = True
         st.session_state["username"] = username
         st.session_state["name"] = users[username]["name"]
-        return True
-    return False
+        st.session_state["page"] = "Accueil"  # ✅ redirection automatique vers Accueil
+        st.success(f"Bienvenue {st.session_state['name']} 👋")
+        st.rerun()  # ✅ recharge immédiate de l'app vers la page d'accueil
+    else:
+        st.error("❌ Identifiants incorrects")
 
 if not st.session_state["login"]:
     st.title("🔑 Connexion espace expert-comptable")
     username_input = st.text_input("Identifiant")
     password_input = st.text_input("Mot de passe", type="password")
     if st.button("Connexion"):
-        if login(username_input, password_input):
-            st.success(f"Bienvenue {st.session_state['name']} 👋")
-        else:
-            st.error("❌ Identifiants incorrects")
+        login(username_input, password_input)
     st.stop()
 
 
