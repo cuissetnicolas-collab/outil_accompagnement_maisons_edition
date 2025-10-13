@@ -491,10 +491,10 @@ elif page == "SYNTHESE GLOBALE":
         df_rem = filtre_compte(df, remises, "Remise")
         df_ventes = filtre_compte(df, ventes)
 
-        # Totaux
-        ca_brut = df_ventes["Montant_net"].sum() if not df_ventes.empty else 0
-        total_retours = df_ret["Montant_net"].sum() if not df_ret.empty else 0
-        total_remises = df_rem["Montant_net"].sum() if not df_rem.empty else 0
+        # Totaux avec valeur absolue pour éviter les négatifs
+        ca_brut = abs(df_ventes["Montant_net"].sum()) if not df_ventes.empty else 0
+        total_retours = abs(df_ret["Montant_net"].sum()) if not df_ret.empty else 0
+        total_remises = abs(df_rem["Montant_net"].sum()) if not df_rem.empty else 0
         ca_net = ca_brut - total_retours - total_remises
 
         # Affichage tableau
