@@ -176,6 +176,19 @@ elif page == "SOCLE EDITION":
             st.dataframe(pivot.head(20))
             st.info("ℹ️ Note : assurez-vous que les colonnes, libellés et comptes sont correctement renseignés pour votre logiciel.")
 
+            # 👉 Nouveau message pédagogique pour guider vers les outils
+            st.info("""
+            🎯 Le socle pivot est prêt !  
+            Vous pouvez maintenant générer et analyser vos données dans les modules suivants :
+            - **VISION EDITION** : analyse des ventes par ISBN et indicateurs analytiques  
+            - **ISBN VIEW** : mini compte de résultat par ISBN  
+            - **CASH EDITION** : trésorerie prévisionnelle  
+            - **ROYALTIES EDITION** : suivi des droits d’auteurs  
+            - **RETURNS EDITION** : gestion des retours et remises  
+
+            📌 Une synthèse globale sera disponible à la fin dans **SYNTHESE GLOBALE**.
+            """)
+
 # =====================
 # VISION EDITION
 # =====================
