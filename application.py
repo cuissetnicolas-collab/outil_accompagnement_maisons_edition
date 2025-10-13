@@ -462,10 +462,11 @@ elif page == "CASH EDITION":
             )
 
 # =====================
-# SYNTHESE GLOBALE (corrigée)
+# SYNTHESE GLOBALE (alignée sur module RETOURS)
 # =====================
 elif page == "SYNTHESE GLOBALE":
     st.header("📊 SYNTHESE GLOBALE")
+
     if "df_pivot" not in st.session_state:
         st.warning("⚠️ Générer d'abord le SOCLE EDITION.")
     else:
@@ -475,61 +476,86 @@ elif page == "SYNTHESE GLOBALE":
         retours = params.get("retours", [])
         remises = params.get("remises", [])
 
-        # Assurer les colonnes numériques
+        # Conversion sécurisée des colonnes comptables
         for col in ["Débit", "Crédit"]:
-            if col in df.columns:
-                df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0)
-            else:
-                df[col] = 0
+            df[col] = pd.to_numeric(df.get(col, 0), errors="coerce").fillna(0)
 
-        # Fonction utilitaire : calcule le total net pour une liste de préfixes de comptes
-        def total_net_par_comptes(df_full, prefixes, libelle_filter=None):
+        # --- Fonction utilitaire ---
+        def total_net(df_full, prefixes, libelle_filter=None):
+            """Retourne (Débit - Crédit) filtré par compte ou libellé"""
             if not prefixes:
                 return 0
-            # filtrer par préfixes (startswith) — accepte préfixes courts comme "709" ou complets "709000000"
             mask = df_full["Compte"].astype(str).str.startswith(tuple(prefixes))
             df_sel = df_full[mask].copy()
-            # si aucun résultat et qu'il y a une colonne 'Libellé' et un filtre fourni, fallback sur libellé
             if df_sel.empty and libelle_filter and "Libellé" in df_full.columns:
-                df_sel = df_full[df_full["Libellé"].astype(str).str.contains(libelle_filter, case=False, na=False)].copy()
+                df_sel = df_full[
+                    df_full["Libellé"].astype(str).str.contains(libelle_filter, case=False, na=False)
+                ].copy()
             if df_sel.empty:
                 return 0
-            df_sel["Montant_net"] = df_sel["Débit"] - df_sel["Crédit"]  # net réel
+
+            df_sel["Montant_net"] = df_sel["Débit"] - df_sel["Crédit"]
             return df_sel["Montant_net"].sum()
 
-        # Totaux nets (Débit - Crédit)
-        total_ventes_net = total_net_par_comptes(df, ventes)                 # ventes net (souvent Crédit - Débit mais on garde Débit-Crédit symétrique)
-        total_retours_net = total_net_par_comptes(df, retours, libelle_filter="Retour")
-        total_remises_net = total_net_par_comptes(df, remises, libelle_filter="Remise")
+        # --- Calculs principaux ---
+        total_ventes = total_net(df, ventes, libelle_filter="Vente")
+        total_retours = total_net(df, retours, libelle_filter="Retour")
+        total_remises = total_net(df, remises, libelle_filter="Remise")
 
-        # Pour affichage on prend la valeur absolue (mais calculs utilisent le net)
-        ca_brut = abs(total_ventes_net)
-        total_retours = abs(total_retours_net)
-        total_remises = abs(total_remises_net)
-        ca_net = ca_brut - total_retours - total_remises
+        # --- Valeurs absolues pour affichage ---
+        ventes_abs = abs(total_ventes)
+        retours_abs = abs(total_retours)
+        remises_abs = abs(total_remises)
+        ca_net = ventes_abs - retours_abs - remises_abs
 
-        # Présentation
+        # --- Taux ---
+        taux_retours = (retours_abs / ventes_abs * 100) if ventes_abs else 0
+        taux_remises = (remises_abs / ventes_abs * 100) if ventes_abs else 0
+
+        # --- Affichage des indicateurs ---
+        st.subheader("📈 Indicateurs clés")
+        col1, col2, col3 = st.columns(3)
+        col1.metric("CA brut (ventes)", f"{ventes_abs:,.0f} €")
+        col2.metric("Retours", f"{retours_abs:,.0f} €", f"{taux_retours:.1f}%")
+        col3.metric("Remises", f"{remises_abs:,.0f} €", f"{taux_remises:.1f}%")
+
+        st.metric("CA net après retours et remises", f"{ca_net:,.0f} €")
+
+        # --- Tableau récap ---
         df_summary = pd.DataFrame({
-            "Indicateur": ["CA brut (net)", "Total retours (net)", "Total remises (net)", "CA net après retours/remises"],
-            "Montant": [ca_brut, total_retours, total_remises, ca_net]
+            "Indicateur": [
+                "CA brut (ventes)",
+                "Total retours",
+                "Total remises",
+                "CA net après retours/remises"
+            ],
+            "Montant": [ventes_abs, retours_abs, remises_abs, ca_net]
         })
 
-        st.subheader("Tableau récapitulatif")
+        st.subheader("📊 Tableau récapitulatif")
         st.dataframe(df_summary.style.format({"Montant": "{:,.0f} €"}))
 
-        # Graphique synthèse
-        fig_summary = px.bar(df_summary, x="Indicateur", y="Montant", text="Montant", title="📊 Synthèse financière globale")
+        # --- Graphique synthétique ---
+        fig_summary = px.bar(
+            df_summary, x="Indicateur", y="Montant", text="Montant",
+            title="Synthèse financière globale (débit - crédit)"
+        )
         fig_summary.update_traces(texttemplate='%{text:,.0f}', textposition='outside')
         st.plotly_chart(fig_summary, use_container_width=True)
 
-        # Info diagnostic utile si les chiffres semblent incorrects
-        st.markdown("**Diagnostic :**")
-        st.markdown(f"- Comptes ventes paramétrés : {ventes}")
-        st.markdown(f"- Comptes retours paramétrés : {retours}")
-        st.markdown(f"- Comptes remises paramétrés : {remises}")
+        # --- Infos techniques ---
+        st.markdown("**Diagnostic des paramètres utilisés :**")
+        st.markdown(f"- Comptes ventes paramétrés : `{ventes}`")
+        st.markdown(f"- Comptes retours paramétrés : `{retours}`")
+        st.markdown(f"- Comptes remises paramétrés : `{remises}`")
         if "Libellé" in df.columns:
-            st.markdown("- Mode fallback libellé activé (colonne `Libellé` détectée).")
-        st.info("Si les chiffres ne correspondent toujours pas, vérifiez le paramétrage des préfixes de comptes dans SOCLE EDITION ou la présence des mots-clés 'Retour'/'Remise' dans la colonne Libellé.")
+            st.markdown("- Colonne `Libellé` détectée : fallback actif si aucun compte trouvé.")
+        st.info(
+            "💡 Les montants sont calculés selon la logique (Débit – Crédit) pour cohérence avec le module RETURNS EDITION."
+        )
+
+        # --- Copyright ---
+        st.markdown("<br><hr><center>© Nicolas CUISSET</center>", unsafe_allow_html=True)
 
 # =====================
 # FOOTER / COPYRIGHT
