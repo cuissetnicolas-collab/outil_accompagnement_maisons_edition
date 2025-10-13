@@ -463,94 +463,60 @@ elif page == "CASH EDITION":
 
 # =====================
 # SYNTHÈSE GLOBALE
-# =====================
-elif page == "SYNTHÈSE GLOBALE":
+elif page == "SYNTHESE GLOBALE":
     st.header("📘 SYNTHÈSE GLOBALE")
 
-    st.markdown("""
-    Cette synthèse regroupe les résultats des modules précédents (RETURNS EDITION, CASH EDITION, ROYALTIES, etc.).  
-    Les montants sont calculés selon la même méthode que RETURNS EDITION : **Débit - Crédit**, en valeur absolue.
-    """)
-
     if "df_pivot" not in st.session_state:
-        st.warning("⚠️ Vous devez d'abord générer le SOCLE ÉDITION avant d'accéder à la synthèse.")
+        st.warning("⚠️ Vous devez d'abord générer le SOCLE ÉDITION.")
     else:
         df = st.session_state["df_pivot"].copy()
         param = st.session_state.get("param_comptes", {})
 
-        # Vérifications
-        df["Débit"] = pd.to_numeric(df["Débit"], errors="coerce").fillna(0)
-        df["Crédit"] = pd.to_numeric(df["Crédit"], errors="coerce").fillna(0)
-        df["Compte"] = df["Compte"].astype(str).str.strip()
-
-        # Récupération des paramètres
+        # Paramètres comptes
         comptes_ventes = param.get("ventes", [])
         comptes_retours = param.get("retours", [])
         comptes_remises = param.get("remises", [])
 
-        # --- Fonction de filtrage identique à RETURNS EDITION ---
-        def filtre_compte(df_compte, prefix_list, libelle_filtre=None):
-            if not prefix_list:
-                return pd.DataFrame()
-            df_filt = df_compte[df_compte["Compte"].astype(str).str.startswith(tuple(prefix_list))]
-            if "Libellé" in df_filt.columns and libelle_filtre:
-                df_filt = df_filt[df_filt["Libellé"].str.contains(libelle_filtre, case=False, na=False)]
-            if not df_filt.empty:
-                df_filt["Montant_net"] = df_filt["Débit"] - df_filt["Crédit"]
-            return df_filt
+        # Sécurisation colonnes
+        for col in ["Débit", "Crédit", "Compte", "Date"]:
+            if col not in df.columns:
+                if col == "Date":
+                    df[col] = pd.to_datetime("2000-01-01")
+                else:
+                    df[col] = 0
+        df["Débit"] = pd.to_numeric(df["Débit"], errors="coerce").fillna(0)
+        df["Crédit"] = pd.to_numeric(df["Crédit"], errors="coerce").fillna(0)
+        df["Compte"] = df["Compte"].astype(str).str.strip()
+        df["Montant_net"] = df["Débit"] - df["Crédit"]
 
-        # --- Calculs identiques à RETURNS EDITION ---
-        df_ret = filtre_compte(df, comptes_retours, "Retour")
-        df_rem = filtre_compte(df, comptes_remises, "Remise")
-        df_ventes = filtre_compte(df, comptes_ventes)
+        # Filtrage par type
+        df_ventes = df[df["Compte"].str.startswith(tuple(comptes_ventes))] if comptes_ventes else pd.DataFrame()
+        df_retours = df[df["Compte"].str.startswith(tuple(comptes_retours))] if comptes_retours else pd.DataFrame()
+        df_remises = df[df["Compte"].str.startswith(tuple(comptes_remises))] if comptes_remises else pd.DataFrame()
+        df_prov = df[df["Compte"].str.startswith("681")]
 
-        total_retours = df_ret["Montant_net"].sum() if not df_ret.empty else 0
-        total_remises = df_rem["Montant_net"].sum() if not df_rem.empty else 0
+        # Totaux
         total_ventes = df_ventes["Montant_net"].sum() if not df_ventes.empty else 0
-
-        # Provision
-        df_prov = df[df["Compte"].astype(str).str.startswith("681")]
-        if not df_prov.empty:
-            df_prov["Montant_net"] = df_prov["Débit"] - df_prov["Crédit"]
-            provision_retours = df_prov["Montant_net"].sum()
-        else:
-            provision_retours = 0
+        total_retours = df_retours["Montant_net"].sum() if not df_retours.empty else 0
+        total_remises = df_remises["Montant_net"].sum() if not df_remises.empty else 0
+        provision_retours = df_prov["Montant_net"].sum() if not df_prov.empty else 0
 
         # Taux
         taux_retour = abs(total_retours) / abs(total_ventes) * 100 if total_ventes != 0 else 0
         taux_remise = abs(total_remises) / abs(total_ventes) * 100 if total_ventes != 0 else 0
 
-        # --- Affichage des indicateurs ---
-        st.subheader("📊 Indicateurs globaux")
+        # --- Affichage
+        st.subheader("📊 Taux par rapport aux ventes")
+        col1, col2 = st.columns(2)
+        col1.metric("Taux de retour (%)", f"{taux_retour:.2f} %")
+        col2.metric("Taux de remise (%)", f"{taux_remise:.2f} %")
 
-        col1, col2, col3, col4 = st.columns(4)
-        col1.metric("CA Brut", f"{abs(total_ventes):,.0f} €")
-        col2.metric("Retours", f"{abs(total_retours):,.0f} €", f"{taux_retour:.1f}%")
-        col3.metric("Remises", f"{abs(total_remises):,.0f} €", f"{taux_remise:.1f}%")
-        col4.metric("Provision retours (681)", f"{abs(provision_retours):,.0f} €")
-
-        ca_net = abs(total_ventes) - abs(total_retours) - abs(total_remises)
-        st.metric("💰 Chiffre d’affaires net", f"{ca_net:,.0f} €")
-
-        # --- Graphique ---
-        st.subheader("📈 Répartition des postes clés")
-
-        df_viz = pd.DataFrame({
-            "Rubrique": ["CA Brut", "Retours", "Remises", "Provision retours"],
-            "Montant (€)": [abs(total_ventes), abs(total_retours), abs(total_remises), abs(provision_retours)]
-        })
-
-        fig = px.bar(df_viz, x="Rubrique", y="Montant (€)", text="Montant (€)",
-                     title="Répartition des montants", labels={"Montant (€)": "Montant (€)"})
-        fig.update_traces(texttemplate="%{text:,.0f} €", textposition="outside")
-        fig.update_layout(showlegend=False)
-        st.plotly_chart(fig, use_container_width=True)
-
-        # --- Message final ---
-        st.info("""
-        ✅ Les montants sont alignés sur la méthode RETURNS EDITION (Débit - Crédit).  
-        Vous pouvez à présent naviguer vers les autres modules analytiques pour affiner vos analyses.
-        """)
+        st.subheader("📊 Montants Retours / Remises")
+        st.metric("CA Brut", f"{abs(total_ventes):,.0f} €")
+        st.metric("Total Retours", f"{abs(total_retours):,.0f} €")
+        st.metric("Total Remises", f"{abs(total_remises):,.0f} €")
+        st.metric("Provision retours (681)", f"{abs(provision_retours):,.0f} €")
+        st.metric("💰 CA Net", f"{abs(total_ventes) - abs(total_retours) - abs(total_remises):,.0f} €"
 # =====================
 # FOOTER / COPYRIGHT
 # =====================
