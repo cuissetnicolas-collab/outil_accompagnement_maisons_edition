@@ -462,7 +462,7 @@ elif page == "CASH EDITION":
             )
 
 # =====================
-# SYNTHESE GLOBALE (alignée sur module RETOURS)
+# SYNTHESE GLOBALE (version alignée au vrai calcul "débit - crédit")
 # =====================
 elif page == "SYNTHESE GLOBALE":
     st.header("📊 SYNTHESE GLOBALE")
@@ -476,13 +476,12 @@ elif page == "SYNTHESE GLOBALE":
         retours = params.get("retours", [])
         remises = params.get("remises", [])
 
-        # Conversion sécurisée des colonnes comptables
+        # Conversion sécurisée
         for col in ["Débit", "Crédit"]:
             df[col] = pd.to_numeric(df.get(col, 0), errors="coerce").fillna(0)
 
         # --- Fonction utilitaire ---
         def total_net(df_full, prefixes, libelle_filter=None):
-            """Retourne (Débit - Crédit) filtré par compte ou libellé"""
             if not prefixes:
                 return 0
             mask = df_full["Compte"].astype(str).str.startswith(tuple(prefixes))
@@ -494,30 +493,28 @@ elif page == "SYNTHESE GLOBALE":
             if df_sel.empty:
                 return 0
 
+            # Calcul vrai solde (débit - crédit)
             df_sel["Montant_net"] = df_sel["Débit"] - df_sel["Crédit"]
             return df_sel["Montant_net"].sum()
 
-        # --- Calculs principaux ---
-        total_ventes = total_net(df, ventes, libelle_filter="Vente")
-        total_retours = total_net(df, retours, libelle_filter="Retour")
-        total_remises = total_net(df, remises, libelle_filter="Remise")
+        # --- Calculs cohérents ---
+        total_ventes = total_net(df, ventes, "Vente")
+        total_retours = total_net(df, retours, "Retour")
+        total_remises = total_net(df, remises, "Remise")
 
-        # --- Valeurs absolues pour affichage ---
-        ventes_abs = abs(total_ventes)
-        retours_abs = abs(total_retours)
-        remises_abs = abs(total_remises)
-        ca_net = ventes_abs - retours_abs - remises_abs
+        # ✅ CA net = ventes + retours + remises (retours et remises sont négatifs)
+        ca_net = total_ventes + total_retours + total_remises
 
         # --- Taux ---
-        taux_retours = (retours_abs / ventes_abs * 100) if ventes_abs else 0
-        taux_remises = (remises_abs / ventes_abs * 100) if ventes_abs else 0
+        taux_retours = (-total_retours / total_ventes * 100) if total_ventes else 0
+        taux_remises = (-total_remises / total_ventes * 100) if total_ventes else 0
 
-        # --- Affichage des indicateurs ---
+        # --- Affichage ---
         st.subheader("📈 Indicateurs clés")
         col1, col2, col3 = st.columns(3)
-        col1.metric("CA brut (ventes)", f"{ventes_abs:,.0f} €")
-        col2.metric("Retours", f"{retours_abs:,.0f} €", f"{taux_retours:.1f}%")
-        col3.metric("Remises", f"{remises_abs:,.0f} €", f"{taux_remises:.1f}%")
+        col1.metric("CA brut (ventes)", f"{total_ventes:,.0f} €")
+        col2.metric("Retours", f"{total_retours:,.0f} €", f"{taux_retours:.1f}%")
+        col3.metric("Remises", f"{total_remises:,.0f} €", f"{taux_remises:.1f}%")
 
         st.metric("CA net après retours et remises", f"{ca_net:,.0f} €")
 
@@ -529,32 +526,30 @@ elif page == "SYNTHESE GLOBALE":
                 "Total remises",
                 "CA net après retours/remises"
             ],
-            "Montant": [ventes_abs, retours_abs, remises_abs, ca_net]
+            "Montant": [total_ventes, total_retours, total_remises, ca_net]
         })
 
         st.subheader("📊 Tableau récapitulatif")
         st.dataframe(df_summary.style.format({"Montant": "{:,.0f} €"}))
 
-        # --- Graphique synthétique ---
+        # --- Graphique ---
         fig_summary = px.bar(
             df_summary, x="Indicateur", y="Montant", text="Montant",
-            title="Synthèse financière globale (débit - crédit)"
+            title="Synthèse financière globale (Débit - Crédit)"
         )
         fig_summary.update_traces(texttemplate='%{text:,.0f}', textposition='outside')
         st.plotly_chart(fig_summary, use_container_width=True)
 
-        # --- Infos techniques ---
+        # --- Infos ---
         st.markdown("**Diagnostic des paramètres utilisés :**")
         st.markdown(f"- Comptes ventes paramétrés : `{ventes}`")
         st.markdown(f"- Comptes retours paramétrés : `{retours}`")
         st.markdown(f"- Comptes remises paramétrés : `{remises}`")
-        if "Libellé" in df.columns:
-            st.markdown("- Colonne `Libellé` détectée : fallback actif si aucun compte trouvé.")
         st.info(
-            "💡 Les montants sont calculés selon la logique (Débit – Crédit) pour cohérence avec le module RETURNS EDITION."
+            "💡 Les montants sont calculés selon la logique réelle (Débit – Crédit), "
+            "comme dans le module RETURNS EDITION. Les retours apparaissent donc négatifs."
         )
 
-        # --- Copyright ---
         st.markdown("<br><hr><center>© Nicolas CUISSET</center>", unsafe_allow_html=True)
 
 # =====================
