@@ -21,10 +21,33 @@ def login(username, password):
         st.session_state["login"] = True
         st.session_state["username"] = username
         st.session_state["name"] = users[username]["name"]
-        st.session_state["page"] = "ACCUEIL"  # 👉 redirection automatique après connexion
+        st.session_state["page"] = "ACCUEIL"  # ✅ Redirection automatique vers l'accueil
         st.success(f"Bienvenue {st.session_state['name']} ! Redirection vers l'accueil...")
     else:
         st.error("Nom d'utilisateur ou mot de passe incorrect.")
+
+# --- Barre latérale de connexion ---
+if st.session_state["login"]:
+    # ✅ Vérification que 'name' existe avant d'afficher
+    if "name" in st.session_state:
+        st.sidebar.success(f"👤 {st.session_state['name']}")
+    else:
+        st.sidebar.info("🔒 Non connecté")
+
+    # Bouton déconnexion
+    if st.sidebar.button("Se déconnecter"):
+        for key in ["login", "username", "name"]:
+            if key in st.session_state:
+                del st.session_state[key]
+        st.session_state["login"] = False
+        st.session_state["page"] = "ACCUEIL"  # ✅ Retour automatique à l'accueil après déconnexion
+        st.rerun()
+else:
+    st.sidebar.subheader("🔑 Connexion")
+    username = st.sidebar.text_input("Nom d'utilisateur")
+    password = st.sidebar.text_input("Mot de passe", type="password")
+    if st.sidebar.button("Se connecter"):
+        login(username, password)
 
 # =====================
 # HEADER NOM UTILISATEUR
