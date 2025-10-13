@@ -44,9 +44,12 @@ st.sidebar.success(f"👤 {st.session_state['name']}")
 pages = ["Accueil", "DATA EDITION", "SOCLE EDITION", "VISION EDITION", "ISBN VIEW",
          "CASH EDITION", "ROYALTIES EDITION", "RETURNS EDITION", "SYNTHESE GLOBALE"]
 page = st.sidebar.selectbox("📂 Menu principal", pages)
-if st.sidebar.button("Déconnexion"):
-    st.session_state["login"] = False
-    st.experimental_rerun()
+
+# Bouton de déconnexion
+if st.sidebar.button("🚪 Déconnexion"):
+    for key in list(st.session_state.keys()):
+        del st.session_state[key]
+    st.rerun()
 
 # =====================
 # ACCUEIL
