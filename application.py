@@ -462,61 +462,62 @@ elif page == "CASH EDITION":
             )
 
 # =====================
-# SYNTHÈSE GLOBALE
+# SYNTHESE GLOBALE
+# =====================
 elif page == "SYNTHESE GLOBALE":
-    st.header("📘 SYNTHÈSE GLOBALE")
-
+    st.header("📊 SYNTHESE GLOBALE - Vue d'ensemble")
+    
     if "df_pivot" not in st.session_state:
-        st.warning("⚠️ Vous devez d'abord générer le SOCLE ÉDITION.")
+        st.warning("⚠️ Générer d'abord le SOCLE EDITION.")
     else:
         df = st.session_state["df_pivot"].copy()
         param = st.session_state.get("param_comptes", {})
-
-        # Paramètres comptes
+        
         comptes_ventes = param.get("ventes", [])
         comptes_retours = param.get("retours", [])
         comptes_remises = param.get("remises", [])
 
-        # Sécurisation colonnes
-        for col in ["Débit", "Crédit", "Compte", "Date"]:
-            if col not in df.columns:
-                if col == "Date":
-                    df[col] = pd.to_datetime("2000-01-01")
-                else:
-                    df[col] = 0
-        df["Débit"] = pd.to_numeric(df["Débit"], errors="coerce").fillna(0)
-        df["Crédit"] = pd.to_numeric(df["Crédit"], errors="coerce").fillna(0)
-        df["Compte"] = df["Compte"].astype(str).str.strip()
-        df["Montant_net"] = df["Débit"] - df["Crédit"]
+        # --- FILTRAGE ET CALCUL NET ---
+        def filtre_compte(df_compte, prefix_list):
+            if not prefix_list:
+                return pd.DataFrame()
+            df_filt = df_compte[df_compte["Compte"].astype(str).str.startswith(tuple(prefix_list))]
+            if not df_filt.empty:
+                df_filt["Montant_net"] = df_filt["Débit"] - df_filt["Crédit"]
+            return df_filt
 
-        # Filtrage par type
-        df_ventes = df[df["Compte"].str.startswith(tuple(comptes_ventes))] if comptes_ventes else pd.DataFrame()
-        df_retours = df[df["Compte"].str.startswith(tuple(comptes_retours))] if comptes_retours else pd.DataFrame()
-        df_remises = df[df["Compte"].str.startswith(tuple(comptes_remises))] if comptes_remises else pd.DataFrame()
-        df_prov = df[df["Compte"].str.startswith("681")]
+        df_ventes = filtre_compte(df, comptes_ventes)
+        df_retours = filtre_compte(df, comptes_retours)
+        df_remises = filtre_compte(df, comptes_remises)
 
-        # Totaux
         total_ventes = df_ventes["Montant_net"].sum() if not df_ventes.empty else 0
         total_retours = df_retours["Montant_net"].sum() if not df_retours.empty else 0
         total_remises = df_remises["Montant_net"].sum() if not df_remises.empty else 0
-        provision_retours = df_prov["Montant_net"].sum() if not df_prov.empty else 0
 
-        # Taux
+        # Provision retours (681)
+        df_prov = df[df["Compte"].astype(str).str.startswith("681")]
+        if not df_prov.empty:
+            df_prov["Montant_net"] = df_prov["Débit"] - df_prov["Crédit"]
+            provision_retours = df_prov["Montant_net"].sum()
+        else:
+            provision_retours = 0
+
+        # --- TAUX ---
         taux_retour = abs(total_retours) / abs(total_ventes) * 100 if total_ventes != 0 else 0
         taux_remise = abs(total_remises) / abs(total_ventes) * 100 if total_ventes != 0 else 0
 
-        # --- Affichage
         st.subheader("📊 Taux par rapport aux ventes")
         col1, col2 = st.columns(2)
         col1.metric("Taux de retour (%)", f"{taux_retour:.2f} %")
         col2.metric("Taux de remise (%)", f"{taux_remise:.2f} %")
 
+        # --- INDICATEURS ---
         st.subheader("📊 Montants Retours / Remises")
         st.metric("CA Brut", f"{abs(total_ventes):,.0f} €")
         st.metric("Total Retours", f"{abs(total_retours):,.0f} €")
         st.metric("Total Remises", f"{abs(total_remises):,.0f} €")
         st.metric("Provision retours (681)", f"{abs(provision_retours):,.0f} €")
-        st.metric("💰 CA Net", f"{abs(total_ventes) - abs(total_retours) - abs(total_remises):,.0f} €"
+        st.metric("💰 CA Net", f"{abs(total_ventes) - abs(total_retours) - abs(total_remises):,.0f} €")
 # =====================
 # FOOTER / COPYRIGHT
 # =====================
