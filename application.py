@@ -472,7 +472,10 @@ elif page == "SYNTHESE GLOBALE":
     else:
         df = st.session_state["df_pivot"].copy()
         param = st.session_state.get("param_comptes", {})
-        
+
+        st.info("⚠️ La synthèse reprend les calculs du module Returns Edition : CA Brut, retours et remises.")
+
+        # Paramètres
         comptes_ventes = param.get("ventes", [])
         comptes_retours = param.get("retours", [])
         comptes_remises = param.get("remises", [])
@@ -487,14 +490,14 @@ elif page == "SYNTHESE GLOBALE":
             return df_filt
 
         df_ventes = filtre_compte(df, comptes_ventes)
-        df_retours = filtre_compte(df, comptes_retours)
+        df_ret = filtre_compte(df, comptes_retours)
         df_remises = filtre_compte(df, comptes_remises)
 
         total_ventes = df_ventes["Montant_net"].sum() if not df_ventes.empty else 0
-        total_retours = df_retours["Montant_net"].sum() if not df_retours.empty else 0
+        total_retours = df_ret["Montant_net"].sum() if not df_ret.empty else 0
         total_remises = df_remises["Montant_net"].sum() if not df_remises.empty else 0
 
-        # Provision retours (681)
+        # Provision retours
         df_prov = df[df["Compte"].astype(str).str.startswith("681")]
         if not df_prov.empty:
             df_prov["Montant_net"] = df_prov["Débit"] - df_prov["Crédit"]
