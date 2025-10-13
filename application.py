@@ -9,30 +9,22 @@ import plotly.express as px
 # =====================
 if "login" not in st.session_state:
     st.session_state["login"] = False
+if "page" not in st.session_state:
+    st.session_state["page"] = "ACCUEIL"
 
 def login(username, password):
     users = {
-        "aurore": {"password": "12345", "name": "Aurore Demoulin"},
-        "laure.froidefond": {"password": "Laure2019$", "name": "Laure Froidefond"},
-        "Bruno": {"password": "Toto1963$", "name": "Toto El Gringo"}
+        "aurore": {"password": "12345", "name": "Aurore"},
+        "nicolas": {"password": "12345", "name": "Nicolas"}
     }
-    if username in users and password == users[username]["password"]:
+    if username in users and users[username]["password"] == password:
         st.session_state["login"] = True
         st.session_state["username"] = username
         st.session_state["name"] = users[username]["name"]
-        return True
-    return False
-
-if not st.session_state["login"]:
-    st.title("🔑 Connexion espace expert-comptable")
-    username_input = st.text_input("Identifiant")
-    password_input = st.text_input("Mot de passe", type="password")
-    if st.button("Connexion"):
-        if login(username_input, password_input):
-            st.success(f"Bienvenue {st.session_state['name']} 👋")
-        else:
-            st.error("❌ Identifiants incorrects")
-    st.stop()
+        st.session_state["page"] = "ACCUEIL"  # 👉 redirection automatique après connexion
+        st.success(f"Bienvenue {st.session_state['name']} ! Redirection vers l'accueil...")
+    else:
+        st.error("Nom d'utilisateur ou mot de passe incorrect.")
 
 # =====================
 # HEADER NOM UTILISATEUR
