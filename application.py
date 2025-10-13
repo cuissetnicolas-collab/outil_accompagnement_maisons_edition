@@ -11,9 +11,10 @@ if "login" not in st.session_state:
     st.session_state["login"] = False
 
 def login(username, password):
-    users = {"aurore": {"password": "12345", "name": "Aurore Demoulin"},
-            {"laure.froidefond": {"password": "Laure2019$", "name": "Laure Froidefond"}
-            }
+    users = {
+        "aurore": {"password": "12345", "name": "Aurore Demoulin"},
+        "laure.froidefond": {"password": "Laure2019$", "name": "Laure Froidefond"}
+    }
     if username in users and password == users[username]["password"]:
         st.session_state["login"] = True
         st.session_state["username"] = username
