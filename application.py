@@ -234,24 +234,448 @@ elif page == "ISBN VIEW":
 # ROYALTIES EDITION
 # =====================
 elif page == "ROYALTIES EDITION":
-    st.header("📚 ROYALTIES EDITION - Droits d’auteurs détaillés et prévision")
-    if "df_pivot" not in st.session_state:
-        st.warning("⚠️ Générer d'abord le SOCLE EDITION.")
-    else:
-        df = st.session_state["df_pivot"].copy()
-        params = st.session_state["param_comptes"]
-        taux_fixe = st.number_input("Taux fixe de droits (%)", value=10.0)
-        df_ventes = df[df["Compte"].astype(str).str.startswith(tuple(params["ventes"]))]
-        df_ventes["Droits"] = df_ventes["Crédit"] * taux_fixe/100
-        droits_totaux = df_ventes.groupby("Code_Analytique", as_index=False)["Droits"].sum().sort_values("Droits", ascending=False)
-        st.dataframe(droits_totaux)
-        st.info(f"Total droits calculé : {droits_totaux['Droits'].sum():,.0f} €")
-        # Prévision simple
-        horizon = st.slider("Horizon prévision droits (mois)", 3, 24, 12)
-        prevision = droits_totaux.copy()
-        prevision["Droits prévus"] = prevision["Droits"].apply(lambda x: x*(1+0.02)**horizon)
-        st.subheader("Prévision des droits sur horizon choisi")
-        st.dataframe(prevision)
+    st.header("📚 ROYALTIES EDITION — Droits d'auteurs & URSSAF")
+ 
+    # ──────────────────────────────────────────────
+    # TAUX URSSAF (précompte diffuseur — en vigueur 2024)
+    # Le diffuseur/éditeur prélève ces cotisations sur les droits bruts avant
+    # de les verser à l'auteur, puis les reverse à l'URSSAF.
+    # ──────────────────────────────────────────────
+    TAUX_CSG_CRDS        = 0.097   # CSG (9,2%) + CRDS (0,5%) = 9,7%
+    TAUX_FORMATION_PROF  = 0.01    # Contribution formation professionnelle = 1,0%
+    # Cotisation retraite complémentaire RAAP (variable selon revenus) : on laisse paramétrable
+    # Attention : ces taux s'appliquent sur 98,25% des droits bruts (abattement de 1,75%)
+    ASSIETTE_COEFF       = 0.9825  # Abattement forfaitaire frais professionnels
+ 
+    st.info("""
+    **Comment fonctionne ce module ?**
+    
+    1. **Onglet Référentiel** : saisissez vos contrats (auteur, ISBN, taux, paliers, répartition co-auteurs)
+    2. **Onglet Calcul** : les droits sont calculés automatiquement depuis le SOCLE EDITION  
+    3. **Onglet URSSAF** : calcul du précompte (CSG/CRDS + formation pro) à reverser à l'URSSAF  
+    4. **Onglet Relevés** : relevé de compte par auteur, exportable en Excel
+    """)
+ 
+    # ──────────────────────────────────────────────
+    # INITIALISATION DU RÉFÉRENTIEL EN SESSION
+    # Structure : liste de dicts {auteur, isbn, titre, taux_base, paliers, part_auteur}
+    # paliers : liste de {seuil, taux} — ex. [{seuil:0, taux:10}, {seuil:10000, taux:12}]
+    # ──────────────────────────────────────────────
+    if "royalties_referentiel" not in st.session_state:
+        st.session_state["royalties_referentiel"] = []
+ 
+    onglet1, onglet2, onglet3, onglet4 = st.tabs([
+        "📋 Référentiel contrats",
+        "🧮 Calcul des droits",
+        "🏛️ URSSAF / Précompte",
+        "📄 Relevés par auteur"
+    ])
+ 
+    # ══════════════════════════════════════════════
+    # ONGLET 1 — RÉFÉRENTIEL CONTRATS
+    # ══════════════════════════════════════════════
+    with onglet1:
+        st.subheader("Saisie des contrats auteurs")
+ 
+        st.markdown("**Ajouter un contrat**")
+        col_a, col_b = st.columns(2)
+        with col_a:
+            inp_auteur  = st.text_input("Nom de l'auteur")
+            inp_isbn    = st.text_input("ISBN (code analytique exact du SOCLE)")
+            inp_titre   = st.text_input("Titre du livre (pour l'affichage)")
+        with col_b:
+            inp_assiette = st.selectbox(
+                "Assiette de calcul",
+                ["CA net HT (après retours et remises)", "CA brut HT", "Prix public HT"]
+            )
+            inp_part = st.number_input(
+                "Part de cet auteur (%)", min_value=0.0, max_value=100.0, value=100.0, step=1.0,
+                help="Si plusieurs auteurs partagent les droits, indiquez la part de chacun. La somme doit faire 100%."
+            )
+ 
+        st.markdown("**Paliers de droits**")
+        st.caption("Saisissez les paliers de CA à partir desquels le taux change. "
+                   "Si pas de paliers, laissez un seul palier avec seuil = 0.")
+ 
+        nb_paliers = st.number_input("Nombre de paliers", min_value=1, max_value=5, value=1, step=1)
+        paliers = []
+        for i in range(int(nb_paliers)):
+            pc1, pc2 = st.columns(2)
+            with pc1:
+                seuil = st.number_input(
+                    f"Palier {i+1} — CA à partir de (€)", value=0 if i == 0 else i * 5000,
+                    key=f"seuil_{i}"
+                )
+            with pc2:
+                taux = st.number_input(
+                    f"Palier {i+1} — Taux (%)", value=10.0 if i == 0 else 12.0,
+                    key=f"taux_{i}"
+                )
+            paliers.append({"seuil": seuil, "taux": taux})
+ 
+        if st.button("➕ Ajouter ce contrat"):
+            if inp_auteur and inp_isbn:
+                st.session_state["royalties_referentiel"].append({
+                    "auteur":    inp_auteur,
+                    "isbn":      inp_isbn.strip(),
+                    "titre":     inp_titre or inp_isbn,
+                    "assiette":  inp_assiette,
+                    "part":      inp_part,
+                    "paliers":   paliers
+                })
+                st.success(f"✅ Contrat ajouté : {inp_auteur} / {inp_titre or inp_isbn}")
+            else:
+                st.warning("Veuillez renseigner au minimum l'auteur et l'ISBN.")
+ 
+        # ── Import CSV du référentiel ──
+        st.markdown("---")
+        st.markdown("**Import du référentiel depuis un fichier CSV**")
+        st.caption("Le fichier doit avoir les colonnes : auteur, isbn, titre, assiette, part, seuil_1, taux_1, seuil_2, taux_2, ...")
+        fichier_ref = st.file_uploader("Importer le référentiel (CSV)", type=["csv"], key="ref_csv")
+        if fichier_ref:
+            try:
+                df_ref_import = pd.read_csv(fichier_ref)
+                df_ref_import.columns = df_ref_import.columns.str.strip().str.lower()
+                for _, row in df_ref_import.iterrows():
+                    paliers_import = []
+                    i = 1
+                    while f"seuil_{i}" in row and f"taux_{i}" in row:
+                        if pd.notna(row[f"seuil_{i}"]) and pd.notna(row[f"taux_{i}"]):
+                            paliers_import.append({"seuil": float(row[f"seuil_{i}"]), "taux": float(row[f"taux_{i}"])})
+                        i += 1
+                    if not paliers_import:
+                        paliers_import = [{"seuil": 0, "taux": 10.0}]
+                    st.session_state["royalties_referentiel"].append({
+                        "auteur":   str(row.get("auteur", "")),
+                        "isbn":     str(row.get("isbn", "")).strip(),
+                        "titre":    str(row.get("titre", row.get("isbn", ""))),
+                        "assiette": str(row.get("assiette", "CA net HT (après retours et remises)")),
+                        "part":     float(row.get("part", 100)),
+                        "paliers":  paliers_import
+                    })
+                st.success(f"✅ {len(df_ref_import)} contrats importés.")
+            except Exception as e:
+                st.error(f"Erreur lors de l'import : {e}")
+ 
+        # ── Affichage et gestion du référentiel ──
+        st.markdown("---")
+        st.subheader("Contrats enregistrés")
+        ref = st.session_state["royalties_referentiel"]
+        if ref:
+            rows_display = []
+            for idx, c in enumerate(ref):
+                paliers_str = " | ".join(
+                    f">{p['seuil']:,.0f}€ → {p['taux']}%" for p in c["paliers"]
+                )
+                rows_display.append({
+                    "#": idx,
+                    "Auteur": c["auteur"],
+                    "ISBN": c["isbn"],
+                    "Titre": c["titre"],
+                    "Part (%)": c["part"],
+                    "Assiette": c["assiette"],
+                    "Paliers": paliers_str
+                })
+            df_ref_display = pd.DataFrame(rows_display)
+            st.dataframe(df_ref_display, use_container_width=True)
+ 
+            # Suppression
+            idx_suppr = st.number_input("Supprimer le contrat n°", min_value=0, max_value=len(ref)-1, step=1)
+            if st.button("🗑️ Supprimer ce contrat"):
+                st.session_state["royalties_referentiel"].pop(int(idx_suppr))
+                st.rerun()
+ 
+            # Export CSV du référentiel
+            buffer_ref = BytesIO()
+            df_ref_display.to_csv(buffer_ref, index=False)
+            buffer_ref.seek(0)
+            st.download_button(
+                "📥 Exporter le référentiel (CSV)", buffer_ref,
+                file_name="referentiel_contrats.csv", mime="text/csv"
+            )
+        else:
+            st.info("Aucun contrat enregistré. Commencez par en ajouter un ci-dessus.")
+ 
+    # ══════════════════════════════════════════════
+    # ONGLET 2 — CALCUL DES DROITS
+    # ══════════════════════════════════════════════
+    with onglet2:
+        st.subheader("Calcul des droits d'auteurs par titre")
+ 
+        if "df_pivot" not in st.session_state:
+            st.warning("⚠️ Générer d'abord le SOCLE EDITION.")
+        elif not st.session_state["royalties_referentiel"]:
+            st.warning("⚠️ Saisir au moins un contrat dans l'onglet Référentiel.")
+        else:
+            df_pivot = st.session_state["df_pivot"].copy()
+            params   = st.session_state["param_comptes"]
+ 
+            # ── Calcul des CA par ISBN (brut, retours, remises, net) ──
+            def ca_isbn(df, prefix_list):
+                if not prefix_list:
+                    return pd.Series(dtype=float)
+                mask = df["Compte"].astype(str).str.startswith(tuple(prefix_list))
+                return df[mask].groupby("Code_Analytique")["Crédit"].sum() \
+                     - df[mask].groupby("Code_Analytique")["Débit"].sum()
+ 
+            ca_brut    = ca_isbn(df_pivot, params["ventes"])
+            ca_retours = ca_isbn(df_pivot, params["retours"])
+            ca_remises = ca_isbn(df_pivot, params["remises"])
+ 
+            # ── Fonction de calcul par paliers ──
+            def calcul_droits_paliers(base, paliers):
+                """
+                Calcule les droits dus selon des paliers progressifs.
+                paliers : liste triée de {seuil, taux}
+                Exemple : [{seuil:0, taux:10}, {seuil:10000, taux:12}]
+                → de 0 à 10 000€ : 10% ; au-delà : 12%
+                """
+                paliers_sorted = sorted(paliers, key=lambda p: p["seuil"])
+                droits = 0.0
+                for i, palier in enumerate(paliers_sorted):
+                    seuil_bas = palier["seuil"]
+                    seuil_haut = paliers_sorted[i+1]["seuil"] if i+1 < len(paliers_sorted) else float("inf")
+                    if base <= seuil_bas:
+                        break
+                    tranche = min(base, seuil_haut) - seuil_bas
+                    droits += tranche * palier["taux"] / 100
+                return droits
+ 
+            # ── Boucle sur chaque contrat ──
+            resultats = []
+            for contrat in st.session_state["royalties_referentiel"]:
+                isbn = contrat["isbn"]
+ 
+                ca_b  = float(ca_brut.get(isbn, 0))
+                ca_r  = float(ca_retours.get(isbn, 0))
+                ca_re = float(ca_remises.get(isbn, 0))
+                ca_n  = ca_b - abs(ca_r) - abs(ca_re)
+ 
+                # Choix de l'assiette
+                if contrat["assiette"] == "CA brut HT":
+                    base = ca_b
+                else:
+                    # "CA net HT (après retours et remises)" par défaut
+                    base = max(ca_n, 0)
+ 
+                droits_bruts_total = calcul_droits_paliers(base, contrat["paliers"])
+                droits_bruts_part  = droits_bruts_total * contrat["part"] / 100
+ 
+                resultats.append({
+                    "Auteur":         contrat["auteur"],
+                    "ISBN":           isbn,
+                    "Titre":          contrat["titre"],
+                    "Part auteur (%)": contrat["part"],
+                    "Assiette":       contrat["assiette"],
+                    "CA brut (€)":    round(ca_b, 2),
+                    "Retours (€)":    round(abs(ca_r), 2),
+                    "Remises (€)":    round(abs(ca_re), 2),
+                    "Base calcul (€)": round(base, 2),
+                    "Droits bruts (€)": round(droits_bruts_part, 2),
+                })
+ 
+            df_resultats = pd.DataFrame(resultats)
+            st.session_state["df_royalties_resultats"] = df_resultats
+ 
+            if df_resultats.empty:
+                st.info("Aucune correspondance trouvée entre les ISBN du référentiel et ceux du SOCLE.")
+            else:
+                st.dataframe(
+                    df_resultats.style.format({
+                        "CA brut (€)": "{:,.2f}",
+                        "Retours (€)": "{:,.2f}",
+                        "Remises (€)": "{:,.2f}",
+                        "Base calcul (€)": "{:,.2f}",
+                        "Droits bruts (€)": "{:,.2f}",
+                    }),
+                    use_container_width=True
+                )
+ 
+                total_droits = df_resultats["Droits bruts (€)"].sum()
+                st.metric("💰 Total droits d'auteurs bruts dus", f"{total_droits:,.2f} €")
+ 
+                # Graphique droits par titre
+                fig_droits = px.bar(
+                    df_resultats.sort_values("Droits bruts (€)", ascending=False),
+                    x="Titre", y="Droits bruts (€)", color="Auteur",
+                    title="Droits d'auteurs par titre",
+                    labels={"Droits bruts (€)": "Droits (€)", "Titre": ""},
+                    text_auto=".0f"
+                )
+                fig_droits.update_traces(textposition="outside")
+                fig_droits.update_layout(xaxis_tickangle=-30)
+                st.plotly_chart(fig_droits, use_container_width=True)
+ 
+    # ══════════════════════════════════════════════
+    # ONGLET 3 — URSSAF / PRÉCOMPTE
+    # ══════════════════════════════════════════════
+    with onglet3:
+        st.subheader("Calcul URSSAF — Précompte diffuseur")
+ 
+        st.markdown("""
+        En tant qu'éditeur/diffuseur, vous êtes **précompteur** : vous prélevez les cotisations
+        sociales sur les droits bruts avant de les verser à l'auteur, puis vous les reversez à l'URSSAF.
+ 
+        **Assiette** = droits bruts × 98,25% (abattement forfaitaire de 1,75%)
+        """)
+ 
+        col_u1, col_u2, col_u3 = st.columns(3)
+        taux_csg_crds = col_u1.number_input(
+            "CSG + CRDS (%)", value=9.70, step=0.01,
+            help="CSG 9,2% + CRDS 0,5% = 9,7% par défaut"
+        )
+        taux_fp = col_u2.number_input(
+            "Formation professionnelle (%)", value=1.00, step=0.01,
+            help="1% des droits bruts"
+        )
+        taux_raap = col_u3.number_input(
+            "Retraite complémentaire RAAP (%)", value=0.0, step=0.01,
+            help="Variable selon revenus annuels de l'auteur. Laisser à 0 si géré séparément."
+        )
+ 
+        if "df_royalties_resultats" not in st.session_state:
+            st.warning("⚠️ Effectuez d'abord le calcul dans l'onglet 'Calcul des droits'.")
+        else:
+            df_r = st.session_state["df_royalties_resultats"].copy()
+ 
+            df_r["Assiette URSSAF (€)"]     = df_r["Droits bruts (€)"] * ASSIETTE_COEFF
+            df_r["CSG + CRDS (€)"]           = df_r["Assiette URSSAF (€)"] * taux_csg_crds / 100
+            df_r["Formation pro (€)"]        = df_r["Droits bruts (€)"] * taux_fp / 100
+            df_r["Retraite RAAP (€)"]        = df_r["Assiette URSSAF (€)"] * taux_raap / 100
+            df_r["Total cotisations (€)"]    = (
+                df_r["CSG + CRDS (€)"]
+                + df_r["Formation pro (€)"]
+                + df_r["Retraite RAAP (€)"]
+            )
+            df_r["Net à payer auteur (€)"]   = df_r["Droits bruts (€)"] - df_r["Total cotisations (€)"]
+ 
+            st.session_state["df_royalties_urssaf"] = df_r
+ 
+            cols_urssaf = [
+                "Auteur", "Titre",
+                "Droits bruts (€)",
+                "Assiette URSSAF (€)",
+                "CSG + CRDS (€)",
+                "Formation pro (€)",
+                "Retraite RAAP (€)",
+                "Total cotisations (€)",
+                "Net à payer auteur (€)"
+            ]
+            st.dataframe(
+                df_r[cols_urssaf].style.format({
+                    c: "{:,.2f}" for c in cols_urssaf if "(€)" in c
+                }),
+                use_container_width=True
+            )
+ 
+            # Totaux
+            col_m1, col_m2, col_m3 = st.columns(3)
+            col_m1.metric("Droits bruts totaux",       f"{df_r['Droits bruts (€)'].sum():,.2f} €")
+            col_m2.metric("Total cotisations URSSAF",  f"{df_r['Total cotisations (€)'].sum():,.2f} €")
+            col_m3.metric("Net versé aux auteurs",      f"{df_r['Net à payer auteur (€)'].sum():,.2f} €")
+ 
+            # Graphique cotisations vs net
+            df_urssaf_chart = df_r.groupby("Auteur", as_index=False).agg({
+                "Total cotisations (€)": "sum",
+                "Net à payer auteur (€)": "sum"
+            })
+            df_urssaf_melt = df_urssaf_chart.melt(
+                id_vars="Auteur",
+                value_vars=["Total cotisations (€)", "Net à payer auteur (€)"],
+                var_name="Composante", value_name="Montant (€)"
+            )
+            fig_urssaf = px.bar(
+                df_urssaf_melt, x="Auteur", y="Montant (€)", color="Composante",
+                title="Répartition cotisations URSSAF vs net auteur",
+                barmode="stack", text_auto=".0f"
+            )
+            fig_urssaf.update_traces(textposition="inside")
+            st.plotly_chart(fig_urssaf, use_container_width=True)
+ 
+    # ══════════════════════════════════════════════
+    # ONGLET 4 — RELEVÉS PAR AUTEUR
+    # ══════════════════════════════════════════════
+    with onglet4:
+        st.subheader("Relevés de droits par auteur")
+ 
+        source_df_key = "df_royalties_urssaf" if "df_royalties_urssaf" in st.session_state \
+                        else "df_royalties_resultats"
+ 
+        if source_df_key not in st.session_state:
+            st.warning("⚠️ Effectuez d'abord le calcul des droits (onglet 'Calcul des droits').")
+        else:
+            df_releves = st.session_state[source_df_key].copy()
+            auteurs    = sorted(df_releves["Auteur"].unique().tolist())
+ 
+            auteur_sel = st.selectbox("Sélectionnez un auteur", ["Tous"] + auteurs)
+ 
+            if auteur_sel != "Tous":
+                df_auteur = df_releves[df_releves["Auteur"] == auteur_sel]
+            else:
+                df_auteur = df_releves
+ 
+            # Colonnes à afficher selon ce qui est disponible
+            cols_releve_base = [
+                "Auteur", "Titre", "ISBN",
+                "CA brut (€)", "Retours (€)", "Remises (€)",
+                "Base calcul (€)", "Droits bruts (€)"
+            ]
+            cols_releve_urssaf = [
+                "CSG + CRDS (€)", "Formation pro (€)",
+                "Retraite RAAP (€)", "Total cotisations (€)", "Net à payer auteur (€)"
+            ]
+            cols_dispo = [c for c in cols_releve_base + cols_releve_urssaf if c in df_auteur.columns]
+ 
+            st.dataframe(
+                df_auteur[cols_dispo].style.format({
+                    c: "{:,.2f}" for c in cols_dispo if "(€)" in c
+                }),
+                use_container_width=True
+            )
+ 
+            # Résumé par auteur (si "Tous")
+            if auteur_sel == "Tous":
+                st.subheader("Synthèse par auteur")
+                cols_sum = {c: "sum" for c in cols_dispo if "(€)" in c}
+                df_synth = df_releves.groupby("Auteur", as_index=False).agg(cols_sum)
+                st.dataframe(
+                    df_synth.style.format({c: "{:,.2f}" for c in cols_sum}),
+                    use_container_width=True
+                )
+ 
+            # ── Export Excel multi-feuilles ──
+            buffer_xl = BytesIO()
+            with pd.ExcelWriter(buffer_xl, engine="openpyxl") as writer:
+                # Feuille 1 : détail complet
+                df_auteur[cols_dispo].to_excel(
+                    writer, index=False,
+                    sheet_name=f"Détail_{auteur_sel[:20]}"
+                )
+                # Feuille 2 : synthèse par auteur
+                if auteur_sel == "Tous" and "df_synth" in dir():
+                    df_synth.to_excel(writer, index=False, sheet_name="Synthèse auteurs")
+                # Feuille 3 : référentiel contrats
+                if st.session_state["royalties_referentiel"]:
+                    rows_ref = []
+                    for c in st.session_state["royalties_referentiel"]:
+                        row = {
+                            "auteur": c["auteur"], "isbn": c["isbn"],
+                            "titre": c["titre"], "part": c["part"],
+                            "assiette": c["assiette"]
+                        }
+                        for i, p in enumerate(c["paliers"], 1):
+                            row[f"seuil_{i}"] = p["seuil"]
+                            row[f"taux_{i}"]  = p["taux"]
+                        rows_ref.append(row)
+                    pd.DataFrame(rows_ref).to_excel(writer, index=False, sheet_name="Référentiel contrats")
+ 
+            buffer_xl.seek(0)
+            st.download_button(
+                label=f"📥 Télécharger le relevé — {auteur_sel}",
+                data=buffer_xl,
+                file_name=f"Royalties_{auteur_sel.replace(' ','_')}.xlsx",
+                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+            )
 
 # =====================
 # RETURNS EDITION
