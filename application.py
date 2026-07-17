@@ -129,10 +129,34 @@ elif page == "SOCLE EDITION":
         compte_col = st.selectbox("Colonne des comptes", columns)
         debit_col = st.selectbox("Colonne Débit", columns)
         credit_col = st.selectbox("Colonne Crédit", columns)
-        famille_col = st.selectbox("Colonne Famille analytique (optionnel)", [""] + columns)
-        code_col = st.selectbox("Colonne Code analytique / ISBN (optionnel)", [""] + columns)
         date_col = st.selectbox("Colonne Date", columns)
         libelle_col = st.selectbox("Colonne Libellé (optionnel)", [""] + columns)
+
+        st.markdown("**Familles analytiques**")
+        st.caption("Votre export peut contenir plusieurs familles analytiques en parallèle "
+                   "(ex. EDITION pour les ISBN, COMMUNICATION pour la création graphique, "
+                   "et la famille native « Types de dépenses / revenus » de votre logiciel). "
+                   "Mappez ici chaque paire de colonnes Famille / Code. La 1ère famille mappée "
+                   "sert de référence pour le pivot ISBN (EDITION) ; les suivantes ne servent "
+                   "qu'aux contrôles de cohérence, pour qu'une ligne déjà affectée dans une "
+                   "autre famille (ex. COMMUNICATION) ne soit pas signalée à tort comme non affectée.")
+
+        nb_familles = st.number_input("Nombre de familles analytiques à mapper", min_value=1, max_value=3, value=1, step=1)
+        familles_mapping = []
+        noms_suggestion = ["EDITION", "COMMUNICATION", "Types de dépenses / revenus"]
+        for i in range(int(nb_familles)):
+            fc1, fc2, fc3 = st.columns([1, 1, 1])
+            with fc1:
+                nom_famille = st.text_input(
+                    f"Nom de la famille {i+1}",
+                    value=noms_suggestion[i] if i < len(noms_suggestion) else "",
+                    key=f"nom_famille_{i}"
+                )
+            with fc2:
+                famille_col_i = st.selectbox(f"Colonne Famille {i+1} (optionnel)", [""] + columns, key=f"famille_col_{i}")
+            with fc3:
+                code_col_i = st.selectbox(f"Colonne Code analytique {i+1} (optionnel)", [""] + columns, key=f"code_col_{i}")
+            familles_mapping.append({"nom": nom_famille, "famille_col": famille_col_i, "code_col": code_col_i})
 
         st.subheader("Paramétrage des comptes clés")
         ventes_comptes = st.text_input("Numéros de comptes ventes (séparés par virgule)", value="701")
@@ -154,12 +178,28 @@ elif page == "SOCLE EDITION":
         if st.button("Générer le SOCLE"):
             # Mapping des colonnes
             mapping = {compte_col: "Compte", debit_col: "Débit", credit_col: "Crédit"}
-            if famille_col != "": mapping[famille_col] = "Famille_Analytique"
-            if code_col != "": mapping[code_col] = "Code_Analytique"
             if libelle_col != "": mapping[libelle_col] = "Libellé"
             mapping[date_col] = "Date"
+
+            # Chaque famille mappée génère une paire de colonnes Famille_Analytique[_i] / Code_Analytique[_i].
+            # La famille n°1 (sans suffixe) reste la référence utilisée par les modules ISBN (EDITION).
+            familles_cols = []
+            codes_cols = []
+            noms_familles_actives = []
+            for i, fam in enumerate(familles_mapping):
+                suffix = "" if i == 0 else f"_{i+1}"
+                col_famille_out = f"Famille_Analytique{suffix}"
+                col_code_out = f"Code_Analytique{suffix}"
+                if fam["famille_col"] != "":
+                    mapping[fam["famille_col"]] = col_famille_out
+                if fam["code_col"] != "":
+                    mapping[fam["code_col"]] = col_code_out
+                familles_cols.append(col_famille_out)
+                codes_cols.append(col_code_out)
+                noms_familles_actives.append(fam["nom"] or f"Famille {i+1}")
+
             df.rename(columns=mapping, inplace=True)
-            for col in ["Famille_Analytique", "Code_Analytique", "Libellé"]:
+            for col in familles_cols + codes_cols + ["Libellé"]:
                 if col not in df.columns:
                     df[col] = ""
                 else:
@@ -174,6 +214,9 @@ elif page == "SOCLE EDITION":
                 "charges": label_charges_indirectes.strip(),
                 "produits": label_produits_indirects.strip(),
             }
+            st.session_state["familles_cols"] = familles_cols
+            st.session_state["codes_cols"] = codes_cols
+            st.session_state["noms_familles_actives"] = noms_familles_actives
 
             # ================================================
             # CONTRÔLES DE COHÉRENCE (cf. mémoire — 3 contrôles)
@@ -202,26 +245,34 @@ elif page == "SOCLE EDITION":
 
             # --- Contrôle 2 : cohérence charges générales / charges analytiques ---
             # Vérifie que chaque ligne de charge (6xx) ou de produit (7xx) dispose bien
-            # d'un code analytique, et que le total analytique = total général.
+            # d'un code analytique DANS AU MOINS UNE des familles mappées (EDITION,
+            # COMMUNICATION, Types de dépenses...), et que le total analytique = total général.
+            # Une ligne affectée seulement en COMMUNICATION (ex. création graphique) ne doit
+            # donc pas remonter comme "non affectée" sous prétexte qu'elle n'a pas de code EDITION.
+            codes_cols = st.session_state["codes_cols"]
+            noms_familles_actives = st.session_state["noms_familles_actives"]
             df_pl = df[df["Compte"].str.startswith(("6", "7"))].copy()
-            df_pl_non_code = df_pl[df_pl["Code_Analytique"].astype(str).str.strip() == ""]
+            has_any_code = pd.Series(False, index=df_pl.index)
+            for c in codes_cols:
+                has_any_code = has_any_code | (df_pl[c].astype(str).str.strip() != "")
+            df_pl_non_code = df_pl[~has_any_code]
             total_general_pl = (df_pl["Crédit"] - df_pl["Débit"]).sum()
-            total_analytique_pl = (
-                df_pl[df_pl["Code_Analytique"].astype(str).str.strip() != ""]["Crédit"]
-                - df_pl[df_pl["Code_Analytique"].astype(str).str.strip() != ""]["Débit"]
-            ).sum()
+            total_analytique_pl = (df_pl[has_any_code]["Crédit"] - df_pl[has_any_code]["Débit"]).sum()
             ecart_pl = round(total_general_pl - total_analytique_pl, 2)
 
             if len(df_pl_non_code) > 0 or abs(ecart_pl) > 0.01:
                 alerte_globale = True
                 st.error("❌ Contrôle de cohérence charges/produits analytiques : anomalies détectées")
-                st.write(f"- {len(df_pl_non_code)} ligne(s) de charge ou de produit sans code analytique "
+                st.write(f"- {len(df_pl_non_code)} ligne(s) de charge ou de produit sans code analytique dans "
+                         f"aucune des familles mappées ({', '.join(noms_familles_actives)}) "
                          f"(montant net non affecté : {round((df_pl_non_code['Crédit'] - df_pl_non_code['Débit']).sum(), 2):,.2f} €)")
                 st.write(f"- Écart total général / total analytique : {ecart_pl:,.2f} €")
                 if len(df_pl_non_code) > 0:
                     st.dataframe(df_pl_non_code[["Compte", "Libellé", "Date", "Débit", "Crédit"]].head(50))
             else:
-                st.success("✅ Contrôle de cohérence charges/produits analytiques : toutes les lignes 6xx/7xx sont affectées, total général = total analytique.")
+                st.success(f"✅ Contrôle de cohérence charges/produits analytiques : toutes les lignes 6xx/7xx sont "
+                           f"affectées (toutes familles confondues : {', '.join(noms_familles_actives)}), "
+                           f"total général = total analytique.")
 
             # --- Contrôle 3 : cohérence des volumes BLDD ---
             st.markdown("**Contrôle de cohérence des volumes BLDD**")
@@ -271,7 +322,10 @@ elif page == "SOCLE EDITION":
             # ================================================
             # GÉNÉRATION DU PIVOT
             # ================================================
-            group_cols = ["Compte", "Famille_Analytique", "Code_Analytique", "Date"]
+            # On conserve dans le pivot les colonnes de toutes les familles mappées (pas seulement
+            # EDITION) afin que les futurs modules puissent, si besoin, filtrer/croiser sur
+            # COMMUNICATION ou "Types de dépenses / revenus" sans repasser par le fichier source.
+            group_cols = ["Compte"] + st.session_state["familles_cols"] + st.session_state["codes_cols"] + ["Date"]
             if "Libellé" in df.columns:
                 group_cols.append("Libellé")
             pivot = df.groupby(group_cols, as_index=False).agg({"Débit": "sum", "Crédit": "sum"})
