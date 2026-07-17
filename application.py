@@ -8,7 +8,6 @@ import plotly.express as px
 # AUTHENTIFICATION
 # =====================
 import streamlit as st
-
 if "login" not in st.session_state:
     st.session_state["login"] = False
 if "page" not in st.session_state:
@@ -38,7 +37,6 @@ if not st.session_state["login"]:
         login(username_input, password_input)
     st.stop()
 
-
 # =====================
 # HEADER NOM UTILISATEUR
 # =====================
@@ -64,13 +62,13 @@ if page == "Accueil":
     st.title("👋 Bienvenue dans votre outil d'accompagnement éditorial")
     st.markdown("""
     Cet outil permet de :
-    - Importer vos données comptables analytiques (**DATA EDITION**)  
-    - Générer un socle pivot multi-logiciels (**SOCLE EDITION**)  
-    - Analyser vos ventes et résultats par ISBN (**VISION EDITION & ISBN VIEW**)  
-    - Suivre la trésorerie (**CASH EDITION**)  
-    - Piloter les droits d’auteurs sur vos livres (**ROYALTIES EDITION**)  
-    - Gérer les retours éditeurs/distributeurs (**RETURNS EDITION**)  
-    - Obtenir une synthèse globale (**SYNTHESE GLOBALE**)  
+    - Importer vos données comptables analytiques (**DATA EDITION**)
+    - Générer un socle pivot multi-logiciels, avec contrôles et répartition des charges/produits indirects (**SOCLE EDITION**)
+    - Analyser vos ventes et résultats par ISBN (**VISION EDITION & ISBN VIEW**)
+    - Suivre la trésorerie (**CASH EDITION**)
+    - Piloter les droits d'auteurs sur vos livres (**ROYALTIES EDITION**)
+    - Gérer les retours éditeurs/distributeurs (**RETURNS EDITION**)
+    - Obtenir une synthèse globale (**SYNTHESE GLOBALE**)
     Utilisez le menu à gauche pour naviguer entre les modules.
     """)
     st.stop()
@@ -81,7 +79,6 @@ if page == "Accueil":
 if page == "DATA EDITION":
     st.header("📂 DATA EDITION - Import des données analytiques")
     fichier_comptables = st.file_uploader("Sélectionnez votre fichier Excel", type=["xlsx"])
-
     if fichier_comptables:
         try:
             df = pd.read_excel(fichier_comptables, header=0)
@@ -89,21 +86,19 @@ if page == "DATA EDITION":
             st.write("Colonnes détectées :", list(df.columns))
             st.session_state["df_comptables"] = df
             st.success(f"✅ Fichier chargé avec succès ({df.shape[0]} lignes)")
-
             st.dataframe(df.head())
-
             # 👉 Message d'étape suivante
             st.info("""
-            ✅ Votre fichier a bien été importé !  
+            ✅ Votre fichier a bien été importé !
             Prochaine étape : rendez-vous dans **SOCLE EDITION** pour :
-            - Sélectionner les colonnes (Compte, Débit, Crédit, etc.)  
-            - Paramétrer vos comptes (ventes, retours, remises, charges)  
-            - Et générer le **socle pivot analytique**.  
+            - Sélectionner les colonnes (Compte, Débit, Crédit, etc.)
+            - Paramétrer vos comptes (ventes, retours, remises, charges)
+            - Passer les contrôles de cohérence
+            - Décider de la répartition des charges/produits indirects
+            - Et générer le **socle pivot analytique**.
             """)
-
         except Exception as e:
             st.error(f"❌ Erreur lors de l'importation du fichier : {e}")
-
     else:
         st.warning("Veuillez importer un fichier Excel pour continuer.")
 
@@ -112,25 +107,25 @@ if page == "DATA EDITION":
 # =====================
 elif page == "SOCLE EDITION":
     st.header("🛠️ SOCLE EDITION - Génération du pivot analytique")
-    
+
     if "df_comptables" not in st.session_state:
         st.warning("⚠️ Importer d'abord les données via DATA EDITION.")
     else:
         df = st.session_state["df_comptables"].copy()
-        
+
         # --- Message d'introduction ---
         st.info("""
-        💡 Bienvenue dans le module SOCLE EDITION !  
-        Ici, vous allez pouvoir générer votre pivot analytique à partir des données importées.  
+        💡 Bienvenue dans le module SOCLE EDITION !
+        Ici, vous allez pouvoir générer votre pivot analytique à partir des données importées.
         Veuillez renseigner soigneusement :
-        - Les **colonnes correspondant à vos données** (comptes, débit, crédit, libellés, dates…)  
-        - Les **paramètres de comptes comptables** correspondant à votre logiciel pour les ventes, retours, remises et charges  
+        - Les **colonnes correspondant à vos données** (comptes, débit, crédit, libellés, dates…)
+        - Les **paramètres de comptes comptables** correspondant à votre logiciel pour les ventes, retours, remises et charges
         ⚠️ Ces informations permettront de générer correctement le socle analytique et vos outils d'analyse ultérieurs.
         """)
-        
+
         st.subheader("Mapping des colonnes")
         columns = list(df.columns)
-        
+
         compte_col = st.selectbox("Colonne des comptes", columns)
         debit_col = st.selectbox("Colonne Débit", columns)
         credit_col = st.selectbox("Colonne Crédit", columns)
@@ -148,6 +143,14 @@ elif page == "SOCLE EDITION":
         st.subheader("Charges fixes imputées")
         charges_imputees = st.radio("Les charges fixes ont-elles déjà été imputées par section ?", ["Oui", "Non"])
 
+        # Libellés utilisés pour repérer les lignes indirectes dans le Code_Analytique.
+        # Ils doivent correspondre à ce qui a été saisi lors de l'affectation analytique
+        # (ex. "CHARGES INDIRECTES", "PRODUITS INDIRECTS" côté grand livre).
+        st.subheader("Libellés des lignes indirectes")
+        col_li1, col_li2 = st.columns(2)
+        label_charges_indirectes = col_li1.text_input("Libellé des charges indirectes", value="CHARGES INDIRECTES")
+        label_produits_indirects = col_li2.text_input("Libellé des produits indirects", value="PRODUITS INDIRECTS")
+
         if st.button("Générer le SOCLE"):
             # Mapping des colonnes
             mapping = {compte_col: "Compte", debit_col: "Débit", credit_col: "Crédit"}
@@ -155,26 +158,127 @@ elif page == "SOCLE EDITION":
             if code_col != "": mapping[code_col] = "Code_Analytique"
             if libelle_col != "": mapping[libelle_col] = "Libellé"
             mapping[date_col] = "Date"
-
             df.rename(columns=mapping, inplace=True)
-
             for col in ["Famille_Analytique", "Code_Analytique", "Libellé"]:
                 if col not in df.columns:
                     df[col] = ""
                 else:
                     df[col] = df[col].fillna("")
-
             df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
+            df["Débit"] = pd.to_numeric(df["Débit"], errors="coerce").fillna(0)
+            df["Crédit"] = pd.to_numeric(df["Crédit"], errors="coerce").fillna(0)
+            df["Compte"] = df["Compte"].astype(str).str.strip()
 
-            # Génération du pivot
+            st.session_state["df_source_mappe"] = df
+            st.session_state["labels_indirect"] = {
+                "charges": label_charges_indirectes.strip(),
+                "produits": label_produits_indirects.strip(),
+            }
+
+            # ================================================
+            # CONTRÔLES DE COHÉRENCE (cf. mémoire — 3 contrôles)
+            # ================================================
+            st.subheader("🔎 Contrôles de cohérence")
+            alerte_globale = False
+
+            # --- Contrôle 1 : contrôle de l'import ---
+            # Vérifie que tous les champs attendus sont présents et correctement renseignés.
+            champs_attendus = ["Compte", "Débit", "Crédit", "Date"]
+            champs_manquants = [c for c in champs_attendus if c not in df.columns]
+            lignes_compte_vide = df["Compte"].isna().sum() + (df["Compte"] == "").sum()
+            lignes_date_invalide = df["Date"].isna().sum()
+
+            if champs_manquants or lignes_compte_vide > 0 or lignes_date_invalide > 0:
+                alerte_globale = True
+                st.error("❌ Contrôle de l'import : anomalies détectées")
+                if champs_manquants:
+                    st.write(f"- Champs manquants dans l'export : {champs_manquants}")
+                if lignes_compte_vide > 0:
+                    st.write(f"- {lignes_compte_vide} ligne(s) sans numéro de compte")
+                if lignes_date_invalide > 0:
+                    st.write(f"- {lignes_date_invalide} ligne(s) avec une date invalide")
+            else:
+                st.success("✅ Contrôle de l'import : tous les champs attendus sont présents et renseignés.")
+
+            # --- Contrôle 2 : cohérence charges générales / charges analytiques ---
+            # Vérifie que chaque ligne de charge (6xx) ou de produit (7xx) dispose bien
+            # d'un code analytique, et que le total analytique = total général.
+            df_pl = df[df["Compte"].str.startswith(("6", "7"))].copy()
+            df_pl_non_code = df_pl[df_pl["Code_Analytique"].astype(str).str.strip() == ""]
+            total_general_pl = (df_pl["Crédit"] - df_pl["Débit"]).sum()
+            total_analytique_pl = (
+                df_pl[df_pl["Code_Analytique"].astype(str).str.strip() != ""]["Crédit"]
+                - df_pl[df_pl["Code_Analytique"].astype(str).str.strip() != ""]["Débit"]
+            ).sum()
+            ecart_pl = round(total_general_pl - total_analytique_pl, 2)
+
+            if len(df_pl_non_code) > 0 or abs(ecart_pl) > 0.01:
+                alerte_globale = True
+                st.error("❌ Contrôle de cohérence charges/produits analytiques : anomalies détectées")
+                st.write(f"- {len(df_pl_non_code)} ligne(s) de charge ou de produit sans code analytique "
+                         f"(montant net non affecté : {round((df_pl_non_code['Crédit'] - df_pl_non_code['Débit']).sum(), 2):,.2f} €)")
+                st.write(f"- Écart total général / total analytique : {ecart_pl:,.2f} €")
+                if len(df_pl_non_code) > 0:
+                    st.dataframe(df_pl_non_code[["Compte", "Libellé", "Date", "Débit", "Crédit"]].head(50))
+            else:
+                st.success("✅ Contrôle de cohérence charges/produits analytiques : toutes les lignes 6xx/7xx sont affectées, total général = total analytique.")
+
+            # --- Contrôle 3 : cohérence des volumes BLDD ---
+            st.markdown("**Contrôle de cohérence des volumes BLDD**")
+            st.caption("Redéposez le relevé BLDD du mois pour vérifier que les écritures de CA, remises et commissions "
+                       "générées dans l'export analytique correspondent bien au relevé du diffuseur.")
+            fichier_bldd = st.file_uploader("Relevé BLDD (optionnel)", type=["xlsx", "csv"], key="controle_bldd")
+            comptes_ventes_ctrl = [c.strip() for c in ventes_comptes.split(",")]
+            comptes_retours_ctrl = [c.strip() for c in retours_comptes.split(",")]
+            comptes_remises_ctrl = [c.strip() for c in remises_comptes.split(",")]
+
+            if fichier_bldd:
+                try:
+                    if fichier_bldd.name.endswith(".csv"):
+                        df_bldd = pd.read_csv(fichier_bldd)
+                    else:
+                        df_bldd = pd.read_excel(fichier_bldd)
+                    df_bldd.columns = df_bldd.columns.str.strip()
+                    # Le relevé BLDD attendu suit le format Ecritures_BLDD : Débit / Crédit par ISBN
+                    total_bldd = 0
+                    if "Débit" in df_bldd.columns and "Crédit" in df_bldd.columns:
+                        total_bldd = (df_bldd["Crédit"] - df_bldd["Débit"]).sum()
+                    total_export_bldd = (
+                        df[df["Compte"].astype(str).str.startswith(tuple(comptes_ventes_ctrl
+                            + comptes_retours_ctrl + comptes_remises_ctrl))]["Crédit"]
+                        - df[df["Compte"].astype(str).str.startswith(tuple(comptes_ventes_ctrl
+                            + comptes_retours_ctrl + comptes_remises_ctrl))]["Débit"]
+                    ).sum()
+                    ecart_bldd = round(total_bldd - total_export_bldd, 2)
+                    if abs(ecart_bldd) > 0.01:
+                        alerte_globale = True
+                        st.error(f"❌ Écart entre le relevé BLDD ({total_bldd:,.2f} €) et l'export analytique "
+                                 f"({total_export_bldd:,.2f} €) : {ecart_bldd:,.2f} €")
+                    else:
+                        st.success(f"✅ Le relevé BLDD ({total_bldd:,.2f} €) correspond à l'export analytique.")
+                except Exception as e:
+                    st.warning(f"Impossible de lire le relevé BLDD : {e}")
+            else:
+                st.info("Aucun relevé BLDD déposé — ce contrôle sera ignoré pour cette génération.")
+
+            if alerte_globale:
+                st.warning("⚠️ Des anomalies ont été détectées ci-dessus. Vous pouvez tout de même générer le socle, "
+                           "mais il est recommandé de corriger l'affectation analytique en amont avant de valider "
+                           "le rapport de pilotage.")
+            else:
+                st.success("✅ Tous les contrôles sont passés avec succès.")
+
+            # ================================================
+            # GÉNÉRATION DU PIVOT
+            # ================================================
             group_cols = ["Compte", "Famille_Analytique", "Code_Analytique", "Date"]
             if "Libellé" in df.columns:
                 group_cols.append("Libellé")
-
             pivot = df.groupby(group_cols, as_index=False).agg({"Débit": "sum", "Crédit": "sum"})
 
             # Stockage dans session
             st.session_state["df_pivot"] = pivot
+            st.session_state["df_pivot_brut"] = pivot.copy()
             st.session_state["param_comptes"] = {
                 "ventes": [c.strip() for c in ventes_comptes.split(",")],
                 "retours": [c.strip() for c in retours_comptes.split(",")],
@@ -182,18 +286,127 @@ elif page == "SOCLE EDITION":
                 "charges": [c.strip() for c in charges_comptes.split(",")],
                 "charges_imputees": charges_imputees
             }
-
             st.success("✅ SOCLE EDITION généré et paramétré.")
             st.dataframe(pivot.head(20))
-            st.info("""
-            🎯 Le socle pivot est prêt !  
-            Vous pouvez maintenant générer et analyser vos données dans les modules suivants :
-            - **VISION EDITION** : analyse des ventes par ISBN et indicateurs analytiques  
-            - **ISBN VIEW** : mini compte de résultat par ISBN  
-            - **CASH EDITION** : trésorerie prévisionnelle  
-            - **ROYALTIES EDITION** : suivi des droits d’auteurs  
-            - **RETURNS EDITION** : gestion des retours et remises  
 
+            # ================================================
+            # RÉPARTITION DES CHARGES ET PRODUITS INDIRECTS
+            # ================================================
+            st.subheader("📐 Répartition des charges et produits indirects")
+            st.markdown("""
+            Les charges de structure et certains produits (subventions, prestations non identifiables)
+            n'ont pas pu être affectés à un titre en particulier et ont été codés comme
+            **charges/produits indirects**. Conformément à la méthodologie retenue, il est proposé
+            de les répartir au **nombre de titres actifs** plutôt qu'au chiffre d'affaires, afin de ne pas
+            masquer les titres non rentables derrière les titres porteurs.
+            """)
+
+            label_ci = st.session_state["labels_indirect"]["charges"]
+            label_pi = st.session_state["labels_indirect"]["produits"]
+
+            masque_ci = pivot["Code_Analytique"].astype(str).str.strip() == label_ci
+            masque_pi = pivot["Code_Analytique"].astype(str).str.strip() == label_pi
+            total_charges_indirectes = (pivot[masque_ci]["Débit"] - pivot[masque_ci]["Crédit"]).sum()
+            total_produits_indirects = (pivot[masque_pi]["Crédit"] - pivot[masque_pi]["Débit"]).sum()
+
+            # Titres actifs = codes analytiques EDITION distincts, hors libellés indirects/génériques
+            labels_exclus = {label_ci.upper(), label_pi.upper(), "CREATION GRAPHIQUE", ""}
+            masque_titres = (
+                (pivot["Famille_Analytique"].astype(str).str.upper() == "EDITION")
+                & (~pivot["Code_Analytique"].astype(str).str.upper().isin(labels_exclus))
+            )
+            titres_actifs = sorted(pivot.loc[masque_titres, "Code_Analytique"].astype(str).unique().tolist())
+            nb_titres_actifs = len(titres_actifs)
+
+            col_r1, col_r2, col_r3 = st.columns(3)
+            col_r1.metric("Charges indirectes détectées", f"{total_charges_indirectes:,.2f} €")
+            col_r2.metric("Produits indirects détectés", f"{total_produits_indirects:,.2f} €")
+            col_r3.metric("Nombre de titres actifs", nb_titres_actifs)
+
+            repartir = st.radio(
+                "Souhaitez-vous répartir les charges et produits indirects sur les titres actifs ?",
+                ["Non, je garde une ligne 'indirecte' globale", "Oui, répartir sur les titres actifs"],
+                index=0
+            )
+
+            inducteur = st.selectbox(
+                "Clé de répartition (inducteur)",
+                ["Nombre de titres actifs"],
+                help="Seul l'inducteur 'nombre de titres actifs' est disponible pour le moment, "
+                     "conformément à la méthodologie retenue (le CA n'est volontairement pas proposé "
+                     "car il compenserait les titres non rentables par les titres porteurs)."
+            )
+
+            if repartir.startswith("Oui"):
+                if nb_titres_actifs == 0:
+                    st.error("❌ Aucun titre actif détecté dans la famille EDITION — répartition impossible.")
+                else:
+                    pivot_reparti = pivot[~masque_ci & ~masque_pi].copy()
+                    nouvelles_lignes = []
+
+                    if total_charges_indirectes != 0:
+                        part_charge = round(total_charges_indirectes / nb_titres_actifs, 2)
+                        for isbn in titres_actifs:
+                            nouvelles_lignes.append({
+                                "Compte": "CHARGES INDIRECTES REPARTIES",
+                                "Famille_Analytique": "EDITION",
+                                "Code_Analytique": isbn,
+                                "Date": pd.NaT,
+                                "Libellé": f"Quote-part charges indirectes ({nb_titres_actifs} titres actifs)",
+                                "Débit": part_charge,
+                                "Crédit": 0,
+                            })
+
+                    if total_produits_indirects != 0:
+                        part_produit = round(total_produits_indirects / nb_titres_actifs, 2)
+                        for isbn in titres_actifs:
+                            nouvelles_lignes.append({
+                                "Compte": "PRODUITS INDIRECTS REPARTIS",
+                                "Famille_Analytique": "EDITION",
+                                "Code_Analytique": isbn,
+                                "Date": pd.NaT,
+                                "Libellé": f"Quote-part produits indirects ({nb_titres_actifs} titres actifs)",
+                                "Débit": 0,
+                                "Crédit": part_produit,
+                            })
+
+                    if nouvelles_lignes:
+                        df_nouvelles = pd.DataFrame(nouvelles_lignes)
+                        for c in pivot_reparti.columns:
+                            if c not in df_nouvelles.columns:
+                                df_nouvelles[c] = None
+                        pivot_reparti = pd.concat([pivot_reparti, df_nouvelles[pivot_reparti.columns]], ignore_index=True)
+
+                    st.session_state["df_pivot"] = pivot_reparti
+                    st.session_state["repartition_active"] = True
+                    st.session_state["repartition_detail"] = {
+                        "nb_titres_actifs": nb_titres_actifs,
+                        "part_charge": round(total_charges_indirectes / nb_titres_actifs, 2) if nb_titres_actifs else 0,
+                        "part_produit": round(total_produits_indirects / nb_titres_actifs, 2) if nb_titres_actifs else 0,
+                    }
+
+                    st.success(
+                        f"✅ Répartition effectuée sur {nb_titres_actifs} titres actifs : "
+                        f"{round(total_charges_indirectes / nb_titres_actifs, 2):,.2f} € de charges et "
+                        f"{round(total_produits_indirects / nb_titres_actifs, 2):,.2f} € de produits par titre."
+                    )
+                    st.dataframe(pivot_reparti[
+                        pivot_reparti["Compte"].isin(["CHARGES INDIRECTES REPARTIES", "PRODUITS INDIRECTS REPARTIS"])
+                    ].head(20))
+            else:
+                st.session_state["df_pivot"] = pivot
+                st.session_state["repartition_active"] = False
+                st.info("Les charges et produits indirects restent regroupés sur une ligne globale "
+                        "(non répartie sur les titres). Vous pourrez revenir sur ce choix en régénérant le socle.")
+
+            st.info("""
+            🎯 Le socle pivot est prêt !
+            Vous pouvez maintenant générer et analyser vos données dans les modules suivants :
+            - **VISION EDITION** : analyse des ventes par ISBN et indicateurs analytiques
+            - **ISBN VIEW** : mini compte de résultat par ISBN
+            - **CASH EDITION** : trésorerie prévisionnelle
+            - **ROYALTIES EDITION** : suivi des droits d'auteurs
+            - **RETURNS EDITION** : gestion des retours et remises
             📌 Une synthèse globale sera disponible à la fin dans **SYNTHESE GLOBALE**.
             """)
 
@@ -206,6 +419,8 @@ elif page == "VISION EDITION":
         st.warning("⚠️ Générer d'abord le SOCLE EDITION.")
     else:
         df = st.session_state["df_pivot"].copy()
+        if st.session_state.get("repartition_active"):
+            st.caption("ℹ️ Les charges/produits indirects ont été répartis sur les titres actifs.")
         df["Résultat"] = df["Crédit"] - df["Débit"]
         top_isbn = df.groupby("Code_Analytique", as_index=False)["Résultat"].sum().sort_values("Résultat", ascending=False).head(10)
         st.dataframe(top_isbn)
@@ -221,6 +436,8 @@ elif page == "ISBN VIEW":
         st.warning("⚠️ Générer d'abord le SOCLE EDITION.")
     else:
         df = st.session_state["df_pivot"].copy()
+        if st.session_state.get("repartition_active"):
+            st.caption("ℹ️ Les charges/produits indirects ont été répartis sur les titres actifs.")
         df_cr = df.groupby("Code_Analytique", as_index=False).agg({"Débit":"sum","Crédit":"sum"})
         df_cr["Résultat"] = df_cr["Crédit"] - df_cr["Débit"]
         st.dataframe(df_cr)
@@ -235,7 +452,7 @@ elif page == "ISBN VIEW":
 # =====================
 elif page == "ROYALTIES EDITION":
     st.header("📚 ROYALTIES EDITION — Droits d'auteurs & URSSAF")
- 
+
     # ──────────────────────────────────────────────
     # TAUX URSSAF (précompte diffuseur — en vigueur 2024)
     # Le diffuseur/éditeur prélève ces cotisations sur les droits bruts avant
@@ -246,16 +463,16 @@ elif page == "ROYALTIES EDITION":
     # Cotisation retraite complémentaire RAAP (variable selon revenus) : on laisse paramétrable
     # Attention : ces taux s'appliquent sur 98,25% des droits bruts (abattement de 1,75%)
     ASSIETTE_COEFF       = 0.9825  # Abattement forfaitaire frais professionnels
- 
+
     st.info("""
     **Comment fonctionne ce module ?**
-    
+
     1. **Onglet Référentiel** : saisissez vos contrats (auteur, ISBN, taux, paliers, répartition co-auteurs)
-    2. **Onglet Calcul** : les droits sont calculés automatiquement depuis le SOCLE EDITION  
-    3. **Onglet URSSAF** : calcul du précompte (CSG/CRDS + formation pro) à reverser à l'URSSAF  
+    2. **Onglet Calcul** : les droits sont calculés automatiquement depuis le SOCLE EDITION
+    3. **Onglet URSSAF** : calcul du précompte (CSG/CRDS + formation pro) à reverser à l'URSSAF
     4. **Onglet Relevés** : relevé de compte par auteur, exportable en Excel
     """)
- 
+
     # ──────────────────────────────────────────────
     # INITIALISATION DU RÉFÉRENTIEL EN SESSION
     # Structure : liste de dicts {auteur, isbn, titre, taux_base, paliers, part_auteur}
@@ -263,20 +480,20 @@ elif page == "ROYALTIES EDITION":
     # ──────────────────────────────────────────────
     if "royalties_referentiel" not in st.session_state:
         st.session_state["royalties_referentiel"] = []
- 
+
     onglet1, onglet2, onglet3, onglet4 = st.tabs([
         "📋 Référentiel contrats",
         "🧮 Calcul des droits",
         "🏛️ URSSAF / Précompte",
         "📄 Relevés par auteur"
     ])
- 
+
     # ══════════════════════════════════════════════
     # ONGLET 1 — RÉFÉRENTIEL CONTRATS
     # ══════════════════════════════════════════════
     with onglet1:
         st.subheader("Saisie des contrats auteurs")
- 
+
         st.markdown("**Ajouter un contrat**")
         col_a, col_b = st.columns(2)
         with col_a:
@@ -292,11 +509,11 @@ elif page == "ROYALTIES EDITION":
                 "Part de cet auteur (%)", min_value=0.0, max_value=100.0, value=100.0, step=1.0,
                 help="Si plusieurs auteurs partagent les droits, indiquez la part de chacun. La somme doit faire 100%."
             )
- 
+
         st.markdown("**Paliers de droits**")
         st.caption("Saisissez les paliers de CA à partir desquels le taux change. "
                    "Si pas de paliers, laissez un seul palier avec seuil = 0.")
- 
+
         nb_paliers = st.number_input("Nombre de paliers", min_value=1, max_value=5, value=1, step=1)
         paliers = []
         for i in range(int(nb_paliers)):
@@ -312,7 +529,7 @@ elif page == "ROYALTIES EDITION":
                     key=f"taux_{i}"
                 )
             paliers.append({"seuil": seuil, "taux": taux})
- 
+
         if st.button("➕ Ajouter ce contrat"):
             if inp_auteur and inp_isbn:
                 st.session_state["royalties_referentiel"].append({
@@ -326,7 +543,7 @@ elif page == "ROYALTIES EDITION":
                 st.success(f"✅ Contrat ajouté : {inp_auteur} / {inp_titre or inp_isbn}")
             else:
                 st.warning("Veuillez renseigner au minimum l'auteur et l'ISBN.")
- 
+
         # ── Import CSV du référentiel ──
         st.markdown("---")
         st.markdown("**Import du référentiel depuis un fichier CSV**")
@@ -356,7 +573,7 @@ elif page == "ROYALTIES EDITION":
                 st.success(f"✅ {len(df_ref_import)} contrats importés.")
             except Exception as e:
                 st.error(f"Erreur lors de l'import : {e}")
- 
+
         # ── Affichage et gestion du référentiel ──
         st.markdown("---")
         st.subheader("Contrats enregistrés")
@@ -378,13 +595,13 @@ elif page == "ROYALTIES EDITION":
                 })
             df_ref_display = pd.DataFrame(rows_display)
             st.dataframe(df_ref_display, use_container_width=True)
- 
+
             # Suppression
             idx_suppr = st.number_input("Supprimer le contrat n°", min_value=0, max_value=len(ref)-1, step=1)
             if st.button("🗑️ Supprimer ce contrat"):
                 st.session_state["royalties_referentiel"].pop(int(idx_suppr))
                 st.rerun()
- 
+
             # Export CSV du référentiel
             buffer_ref = BytesIO()
             df_ref_display.to_csv(buffer_ref, index=False)
@@ -395,13 +612,13 @@ elif page == "ROYALTIES EDITION":
             )
         else:
             st.info("Aucun contrat enregistré. Commencez par en ajouter un ci-dessus.")
- 
+
     # ══════════════════════════════════════════════
     # ONGLET 2 — CALCUL DES DROITS
     # ══════════════════════════════════════════════
     with onglet2:
         st.subheader("Calcul des droits d'auteurs par titre")
- 
+
         if "df_pivot" not in st.session_state:
             st.warning("⚠️ Générer d'abord le SOCLE EDITION.")
         elif not st.session_state["royalties_referentiel"]:
@@ -409,7 +626,7 @@ elif page == "ROYALTIES EDITION":
         else:
             df_pivot = st.session_state["df_pivot"].copy()
             params   = st.session_state["param_comptes"]
- 
+
             # ── Calcul des CA par ISBN (brut, retours, remises, net) ──
             def ca_isbn(df, prefix_list):
                 if not prefix_list:
@@ -417,11 +634,11 @@ elif page == "ROYALTIES EDITION":
                 mask = df["Compte"].astype(str).str.startswith(tuple(prefix_list))
                 return df[mask].groupby("Code_Analytique")["Crédit"].sum() \
                      - df[mask].groupby("Code_Analytique")["Débit"].sum()
- 
+
             ca_brut    = ca_isbn(df_pivot, params["ventes"])
             ca_retours = ca_isbn(df_pivot, params["retours"])
             ca_remises = ca_isbn(df_pivot, params["remises"])
- 
+
             # ── Fonction de calcul par paliers ──
             def calcul_droits_paliers(base, paliers):
                 """
@@ -440,27 +657,27 @@ elif page == "ROYALTIES EDITION":
                     tranche = min(base, seuil_haut) - seuil_bas
                     droits += tranche * palier["taux"] / 100
                 return droits
- 
+
             # ── Boucle sur chaque contrat ──
             resultats = []
             for contrat in st.session_state["royalties_referentiel"]:
                 isbn = contrat["isbn"]
- 
+
                 ca_b  = float(ca_brut.get(isbn, 0))
                 ca_r  = float(ca_retours.get(isbn, 0))
                 ca_re = float(ca_remises.get(isbn, 0))
                 ca_n  = ca_b - abs(ca_r) - abs(ca_re)
- 
+
                 # Choix de l'assiette
                 if contrat["assiette"] == "CA brut HT":
                     base = ca_b
                 else:
                     # "CA net HT (après retours et remises)" par défaut
                     base = max(ca_n, 0)
- 
+
                 droits_bruts_total = calcul_droits_paliers(base, contrat["paliers"])
                 droits_bruts_part  = droits_bruts_total * contrat["part"] / 100
- 
+
                 resultats.append({
                     "Auteur":         contrat["auteur"],
                     "ISBN":           isbn,
@@ -473,10 +690,10 @@ elif page == "ROYALTIES EDITION":
                     "Base calcul (€)": round(base, 2),
                     "Droits bruts (€)": round(droits_bruts_part, 2),
                 })
- 
+
             df_resultats = pd.DataFrame(resultats)
             st.session_state["df_royalties_resultats"] = df_resultats
- 
+
             if df_resultats.empty:
                 st.info("Aucune correspondance trouvée entre les ISBN du référentiel et ceux du SOCLE.")
             else:
@@ -490,10 +707,10 @@ elif page == "ROYALTIES EDITION":
                     }),
                     use_container_width=True
                 )
- 
+
                 total_droits = df_resultats["Droits bruts (€)"].sum()
                 st.metric("💰 Total droits d'auteurs bruts dus", f"{total_droits:,.2f} €")
- 
+
                 # Graphique droits par titre
                 fig_droits = px.bar(
                     df_resultats.sort_values("Droits bruts (€)", ascending=False),
@@ -505,20 +722,20 @@ elif page == "ROYALTIES EDITION":
                 fig_droits.update_traces(textposition="outside")
                 fig_droits.update_layout(xaxis_tickangle=-30)
                 st.plotly_chart(fig_droits, use_container_width=True)
- 
+
     # ══════════════════════════════════════════════
     # ONGLET 3 — URSSAF / PRÉCOMPTE
     # ══════════════════════════════════════════════
     with onglet3:
         st.subheader("Calcul URSSAF — Précompte diffuseur")
- 
+
         st.markdown("""
         En tant qu'éditeur/diffuseur, vous êtes **précompteur** : vous prélevez les cotisations
         sociales sur les droits bruts avant de les verser à l'auteur, puis vous les reversez à l'URSSAF.
- 
+
         **Assiette** = droits bruts × 98,25% (abattement forfaitaire de 1,75%)
         """)
- 
+
         col_u1, col_u2, col_u3 = st.columns(3)
         taux_csg_crds = col_u1.number_input(
             "CSG + CRDS (%)", value=9.70, step=0.01,
@@ -532,12 +749,12 @@ elif page == "ROYALTIES EDITION":
             "Retraite complémentaire RAAP (%)", value=0.0, step=0.01,
             help="Variable selon revenus annuels de l'auteur. Laisser à 0 si géré séparément."
         )
- 
+
         if "df_royalties_resultats" not in st.session_state:
             st.warning("⚠️ Effectuez d'abord le calcul dans l'onglet 'Calcul des droits'.")
         else:
             df_r = st.session_state["df_royalties_resultats"].copy()
- 
+
             df_r["Assiette URSSAF (€)"]     = df_r["Droits bruts (€)"] * ASSIETTE_COEFF
             df_r["CSG + CRDS (€)"]           = df_r["Assiette URSSAF (€)"] * taux_csg_crds / 100
             df_r["Formation pro (€)"]        = df_r["Droits bruts (€)"] * taux_fp / 100
@@ -548,9 +765,9 @@ elif page == "ROYALTIES EDITION":
                 + df_r["Retraite RAAP (€)"]
             )
             df_r["Net à payer auteur (€)"]   = df_r["Droits bruts (€)"] - df_r["Total cotisations (€)"]
- 
+
             st.session_state["df_royalties_urssaf"] = df_r
- 
+
             cols_urssaf = [
                 "Auteur", "Titre",
                 "Droits bruts (€)",
@@ -567,13 +784,13 @@ elif page == "ROYALTIES EDITION":
                 }),
                 use_container_width=True
             )
- 
+
             # Totaux
             col_m1, col_m2, col_m3 = st.columns(3)
             col_m1.metric("Droits bruts totaux",       f"{df_r['Droits bruts (€)'].sum():,.2f} €")
             col_m2.metric("Total cotisations URSSAF",  f"{df_r['Total cotisations (€)'].sum():,.2f} €")
             col_m3.metric("Net versé aux auteurs",      f"{df_r['Net à payer auteur (€)'].sum():,.2f} €")
- 
+
             # Graphique cotisations vs net
             df_urssaf_chart = df_r.groupby("Auteur", as_index=False).agg({
                 "Total cotisations (€)": "sum",
@@ -591,29 +808,29 @@ elif page == "ROYALTIES EDITION":
             )
             fig_urssaf.update_traces(textposition="inside")
             st.plotly_chart(fig_urssaf, use_container_width=True)
- 
+
     # ══════════════════════════════════════════════
     # ONGLET 4 — RELEVÉS PAR AUTEUR
     # ══════════════════════════════════════════════
     with onglet4:
         st.subheader("Relevés de droits par auteur")
- 
+
         source_df_key = "df_royalties_urssaf" if "df_royalties_urssaf" in st.session_state \
                         else "df_royalties_resultats"
- 
+
         if source_df_key not in st.session_state:
             st.warning("⚠️ Effectuez d'abord le calcul des droits (onglet 'Calcul des droits').")
         else:
             df_releves = st.session_state[source_df_key].copy()
             auteurs    = sorted(df_releves["Auteur"].unique().tolist())
- 
+
             auteur_sel = st.selectbox("Sélectionnez un auteur", ["Tous"] + auteurs)
- 
+
             if auteur_sel != "Tous":
                 df_auteur = df_releves[df_releves["Auteur"] == auteur_sel]
             else:
                 df_auteur = df_releves
- 
+
             # Colonnes à afficher selon ce qui est disponible
             cols_releve_base = [
                 "Auteur", "Titre", "ISBN",
@@ -625,14 +842,14 @@ elif page == "ROYALTIES EDITION":
                 "Retraite RAAP (€)", "Total cotisations (€)", "Net à payer auteur (€)"
             ]
             cols_dispo = [c for c in cols_releve_base + cols_releve_urssaf if c in df_auteur.columns]
- 
+
             st.dataframe(
                 df_auteur[cols_dispo].style.format({
                     c: "{:,.2f}" for c in cols_dispo if "(€)" in c
                 }),
                 use_container_width=True
             )
- 
+
             # Résumé par auteur (si "Tous")
             if auteur_sel == "Tous":
                 st.subheader("Synthèse par auteur")
@@ -642,7 +859,7 @@ elif page == "ROYALTIES EDITION":
                     df_synth.style.format({c: "{:,.2f}" for c in cols_sum}),
                     use_container_width=True
                 )
- 
+
             # ── Export Excel multi-feuilles ──
             buffer_xl = BytesIO()
             with pd.ExcelWriter(buffer_xl, engine="openpyxl") as writer:
@@ -668,7 +885,7 @@ elif page == "ROYALTIES EDITION":
                             row[f"taux_{i}"]  = p["taux"]
                         rows_ref.append(row)
                     pd.DataFrame(rows_ref).to_excel(writer, index=False, sheet_name="Référentiel contrats")
- 
+
             buffer_xl.seek(0)
             st.download_button(
                 label=f"📥 Télécharger le relevé — {auteur_sel}",
@@ -682,23 +899,19 @@ elif page == "ROYALTIES EDITION":
 # =====================
 elif page == "RETURNS EDITION":
     st.header("📦 RETURNS EDITION - Gestion des retours")
-    
+
     if "df_pivot" not in st.session_state:
         st.warning("⚠️ Générer d'abord le SOCLE EDITION.")
     else:
         df = st.session_state["df_pivot"].copy()
         param = st.session_state.get("param_comptes", {})
-
         st.info("⚠️ Assurez-vous que vos comptes ou libellés retours, ventes et remises sont correctement paramétrés.")
-
         # Paramètres
         comptes_ventes = param.get("ventes", [])
         comptes_retours = param.get("retours", [])
         comptes_remises = param.get("remises", [])
         col_libelle = st.text_input("Colonne Libellé (optionnel pour distinguer Retours/Remises)", value="Libellé")
-
         use_libelle = col_libelle in df.columns
-
         # --- FILTRAGE ET CALCUL NET ---
         def filtre_compte(df_compte, prefix_list, libelle_filtre=None):
             if not prefix_list:
@@ -710,17 +923,14 @@ elif page == "RETURNS EDITION":
                 df_filt["Montant_net"] = df_filt["Débit"] - df_filt["Crédit"]
                 df_filt["Mois"] = df_filt["Date"].dt.strftime("%Y-%m")
             return df_filt
-
         # Filtrage
         df_ret = filtre_compte(df, comptes_retours, "Retour")
         df_remises = filtre_compte(df, comptes_remises, "Remise")
         df_ventes = filtre_compte(df, comptes_ventes)
-
         # Totaux
         total_retours = df_ret["Montant_net"].sum() if not df_ret.empty else 0
         total_remises = df_remises["Montant_net"].sum() if not df_remises.empty else 0
         total_ventes = df_ventes["Montant_net"].sum() if not df_ventes.empty else 0
-
         # Provision retours
         df_prov = df[df["Compte"].astype(str).str.startswith("681")]
         if not df_prov.empty:
@@ -728,36 +938,30 @@ elif page == "RETURNS EDITION":
             provision_retours = df_prov["Montant_net"].sum()
         else:
             provision_retours = 0
-
         # --- TAUX ---
         taux_retour = abs(total_retours) / abs(total_ventes) * 100 if total_ventes != 0 else 0
         taux_remise = abs(total_remises) / abs(total_ventes) * 100 if total_ventes != 0 else 0
-
         st.subheader("📊 Taux par rapport aux ventes")
         col1, col2 = st.columns(2)
         col1.metric("Taux de retour (%)", f"{taux_retour:.2f} %")
         col2.metric("Taux de remise (%)", f"{taux_remise:.2f} %")
-
         # --- INDICATEURS ---
         st.subheader("📊 Montants Retours / Remises")
         st.metric("Total ventes (brut)", f"{abs(total_ventes):,.0f} €")
         st.metric("Total retours", f"{abs(total_retours):,.0f} €")
         st.metric("Total remises", f"{abs(total_remises):,.0f} €")
         st.metric("Provision retours (681)", f"{abs(provision_retours):,.0f} €")
-
         # --- Détail par ISBN ---
         if not df_ret.empty:
             st.subheader("Retours par ISBN")
             ret_isbn = df_ret.groupby("Code_Analytique", as_index=False).agg({"Montant_net":"sum"})
             ret_isbn["Montant_net"] = ret_isbn["Montant_net"].abs()
             st.dataframe(ret_isbn)
-
         if not df_remises.empty:
             st.subheader("Remises par ISBN")
             rem_isbn = df_remises.groupby("Code_Analytique", as_index=False).agg({"Montant_net":"sum"})
             rem_isbn["Montant_net"] = rem_isbn["Montant_net"].abs()
             st.dataframe(rem_isbn)
-
         # --- Tendance mensuelle ---
         if not df_ret.empty:
             st.subheader("Tendance mensuelle des retours")
@@ -767,7 +971,6 @@ elif page == "RETURNS EDITION":
                                title="Montant des retours par mois", labels={"Montant_net":"Montant (€)"})
             fig_trend.update_traces(texttemplate='%{text:,.0f}', textposition='outside')
             st.plotly_chart(fig_trend, use_container_width=True)
-
         if not df_remises.empty:
             st.subheader("Tendance mensuelle des remises")
             trend_rem = df_remises.groupby("Mois", as_index=False)["Montant_net"].sum()
@@ -776,6 +979,7 @@ elif page == "RETURNS EDITION":
                                    title="Montant des remises par mois", labels={"Montant_net":"Montant (€)"})
             fig_trend_rem.update_traces(texttemplate='%{text:,.0f}', textposition='outside')
             st.plotly_chart(fig_trend_rem, use_container_width=True)
+
 # =====================
 # CASH EDITION - Trésorerie prévisionnelle (intégrée)
 # =====================
@@ -785,34 +989,27 @@ elif page == "CASH EDITION":
         st.warning("⚠️ Générer d'abord le SOCLE EDITION.")
     else:
         df_pivot = st.session_state["df_pivot"].copy()
-
         st.info("Module de prévision de trésorerie basé sur le SOCLE analytique.")
-
         # Date de départ
         date_debut = st.date_input("Date de départ de la trésorerie", pd.to_datetime("2025-04-01"))
-
         # Nettoyage et conversions
         df_pivot["Compte"] = df_pivot["Compte"].astype(str).str.strip()
         df_pivot["Date"] = pd.to_datetime(df_pivot["Date"], errors="coerce")
         df_pivot["Débit"] = pd.to_numeric(df_pivot["Débit"], errors="coerce").fillna(0)
         df_pivot["Crédit"] = pd.to_numeric(df_pivot["Crédit"], errors="coerce").fillna(0)
-
         # Calcul du solde de départ : comptes bancaires commençant par '5'
         comptes_bancaires = df_pivot[df_pivot["Compte"].str.startswith("5")]
         solde_depart_df = comptes_bancaires[comptes_bancaires["Date"] <= pd.to_datetime(date_debut)]
         solde_depart_total = solde_depart_df["Crédit"].sum() - solde_depart_df["Débit"].sum()
         st.info(f"Solde de départ (comptes '5' jusqu'à {date_debut}): {solde_depart_total:,.2f} €")
-
         # Paramètres pour la prévision
         horizon = st.slider("Horizon de projection (en mois)", 3, 36, 12)
         croissance_ca = st.number_input("Croissance mensuelle du CA (%)", value=2.0, step=0.1) / 100
         evolution_charges = st.number_input("Évolution mensuelle des charges (%)", value=1.0, step=0.1) / 100
-
         # Préparation des flux : exclure les comptes bancaires (on projette les flux non bancaires)
         df_flux = df_pivot[~df_pivot["Compte"].str.startswith("5")].copy()
         df_flux = df_flux.dropna(subset=["Date"])
         df_flux = df_flux[df_flux["Date"] >= pd.to_datetime(date_debut)]  # uniquement après la date de départ
-
         if df_flux.empty:
             st.warning("Aucun flux non bancaire détecté après la date de départ. Vérifiez votre socle ou la date de départ.")
         else:
@@ -821,14 +1018,12 @@ elif page == "CASH EDITION":
             flux_mensuel = df_flux.groupby("Mois").agg({"Débit": "sum", "Crédit": "sum"}).reset_index()
             flux_mensuel["Solde_mensuel"] = flux_mensuel["Crédit"] - flux_mensuel["Débit"]
             flux_mensuel = flux_mensuel.sort_values("Mois").reset_index(drop=True)
-
             # Prévisions futures
             dernier_mois = pd.Period(flux_mensuel["Mois"].max(), freq="M") if not flux_mensuel.empty else pd.Period(date_debut, freq="M")
             previsions = []
             # Valeurs de départ : on prend le dernier mois existant s'il y en a
             ca_actuel = flux_mensuel["Crédit"].iloc[-1] if not flux_mensuel.empty else 0
             charges_actuelles = flux_mensuel["Débit"].iloc[-1] if not flux_mensuel.empty else 0
-
             for i in range(1, horizon + 1):
                 prochain_mois = (dernier_mois + i).strftime("%Y-%m")
                 ca_actuel = ca_actuel * (1 + croissance_ca)
@@ -840,13 +1035,10 @@ elif page == "CASH EDITION":
                     "Crédit": ca_actuel,
                     "Solde_mensuel": solde_prevu
                 })
-
             df_prev = pd.DataFrame(previsions)
-
             # Concaténation historique + prévisions
             df_tresorerie = pd.concat([flux_mensuel, df_prev], ignore_index=True, sort=False)
             df_tresorerie["Trésorerie_cumulée"] = solde_depart_total + df_tresorerie["Solde_mensuel"].cumsum()
-
             # Graphique
             fig = px.line(
                 df_tresorerie,
@@ -857,7 +1049,6 @@ elif page == "CASH EDITION":
             )
             fig.update_layout(xaxis_title="Mois", yaxis_title="Trésorerie (€)")
             st.plotly_chart(fig, use_container_width=True)
-
             # Détail mensuel formaté
             st.subheader("📋 Détail mensuel (historique + prévisions)")
             # Formatage colonne numérique avant affichage
@@ -871,7 +1062,6 @@ elif page == "CASH EDITION":
                 "Solde_mensuel": "{:,.0f}",
                 "Trésorerie_cumulée": "{:,.0f}"
             }))
-
             # Téléchargement Excel
             buffer = BytesIO()
             with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
@@ -889,16 +1079,17 @@ elif page == "CASH EDITION":
 # =====================
 elif page == "SYNTHESE GLOBALE":
     st.header("📊 SYNTHESE GLOBALE")
-    
+
     if "df_pivot" not in st.session_state:
         st.warning("⚠️ Générer d'abord le SOCLE EDITION.")
     else:
         df = st.session_state["df_pivot"].copy()
+        if st.session_state.get("repartition_active"):
+            st.caption("ℹ️ Les charges/produits indirects ont été répartis sur les titres actifs.")
         params = st.session_state["param_comptes"]
         ventes, retours, remises = params["ventes"], params["retours"], params["remises"]
         col_libelle = "Libellé"
         use_libelle = col_libelle in df.columns
-
         # --- FILTRAGE NET comme Returns Edition ---
         def filtre_compte(df_compte, prefix_list, libelle_filtre=None):
             if not prefix_list:
@@ -909,27 +1100,22 @@ elif page == "SYNTHESE GLOBALE":
             if not df_filt.empty:
                 df_filt["Montant_net"] = df_filt["Débit"] - df_filt["Crédit"]
             return df_filt
-
         # Filtrage
         df_ret = filtre_compte(df, retours, "Retour")
         df_rem = filtre_compte(df, remises, "Remise")
         df_ventes = filtre_compte(df, ventes)
-
         # Totaux avec valeur absolue pour éviter les négatifs
         ca_brut = abs(df_ventes["Montant_net"].sum()) if not df_ventes.empty else 0
         total_retours = abs(df_ret["Montant_net"].sum()) if not df_ret.empty else 0
         total_remises = abs(df_rem["Montant_net"].sum()) if not df_rem.empty else 0
         ca_net = ca_brut - total_retours - total_remises
-
         # Affichage tableau
         df_summary = pd.DataFrame({
             "Indicateur": ["CA brut", "Total retours", "Total remises", "CA net"],
             "Montant": [ca_brut, total_retours, total_remises, ca_net]
         })
-
         st.subheader("Tableau récapitulatif")
         st.dataframe(df_summary.style.format({"Montant":"{:,.0f} €"}))
-
         # Graphique
         fig_summary = px.bar(df_summary, x="Indicateur", y="Montant", text="Montant",
                              title="📊 Synthèse financière globale")
