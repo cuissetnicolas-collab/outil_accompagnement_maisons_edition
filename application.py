@@ -286,50 +286,15 @@ elif page == "SOCLE EDITION":
                            f"affectées (toutes familles confondues : {', '.join(noms_familles_actives)}), "
                            f"total général = total analytique.")
 
-            # --- Contrôle 3 : cohérence des volumes BLDD ---
-            st.markdown("**Contrôle de cohérence des volumes BLDD**")
-            st.caption("Redéposez le relevé BLDD du mois pour vérifier que les écritures de CA, remises et commissions "
-                       "générées dans l'export analytique correspondent bien au relevé du diffuseur.")
-            fichier_bldd = st.file_uploader("Relevé BLDD (optionnel)", type=["xlsx", "csv"], key="controle_bldd")
-            comptes_ventes_ctrl = [c.strip() for c in ventes_comptes.split(",")]
-            comptes_retours_ctrl = [c.strip() for c in retours_comptes.split(",")]
-            comptes_remises_ctrl = [c.strip() for c in remises_comptes.split(",")]
-
-            if fichier_bldd:
-                try:
-                    if fichier_bldd.name.endswith(".csv"):
-                        df_bldd = pd.read_csv(fichier_bldd)
-                    else:
-                        df_bldd = pd.read_excel(fichier_bldd)
-                    df_bldd.columns = df_bldd.columns.str.strip()
-                    # Le relevé BLDD attendu suit le format Ecritures_BLDD : Débit / Crédit par ISBN
-                    total_bldd = 0
-                    if "Débit" in df_bldd.columns and "Crédit" in df_bldd.columns:
-                        total_bldd = (df_bldd["Crédit"] - df_bldd["Débit"]).sum()
-                    total_export_bldd = (
-                        df[df["Compte"].astype(str).str.startswith(tuple(comptes_ventes_ctrl
-                            + comptes_retours_ctrl + comptes_remises_ctrl))]["Crédit"]
-                        - df[df["Compte"].astype(str).str.startswith(tuple(comptes_ventes_ctrl
-                            + comptes_retours_ctrl + comptes_remises_ctrl))]["Débit"]
-                    ).sum()
-                    ecart_bldd = round(total_bldd - total_export_bldd, 2)
-                    if abs(ecart_bldd) > 0.01:
-                        alerte_globale = True
-                        st.error(f"❌ Écart entre le relevé BLDD ({total_bldd:,.2f} €) et l'export analytique "
-                                 f"({total_export_bldd:,.2f} €) : {ecart_bldd:,.2f} €")
-                    else:
-                        st.success(f"✅ Le relevé BLDD ({total_bldd:,.2f} €) correspond à l'export analytique.")
-                except Exception as e:
-                    st.warning(f"Impossible de lire le relevé BLDD : {e}")
-            else:
-                st.info("Aucun relevé BLDD déposé — ce contrôle sera ignoré pour cette génération.")
-
             if alerte_globale:
-                st.warning("⚠️ Des anomalies ont été détectées ci-dessus. Vous pouvez tout de même générer le socle, "
-                           "mais il est recommandé de corriger l'affectation analytique en amont avant de valider "
-                           "le rapport de pilotage.")
+                st.warning("⚠️ Des anomalies ont été détectées ci-dessus (contrôles 1 et 2). Vous pouvez tout de "
+                           "même générer le socle, mais il est recommandé de corriger l'affectation analytique en "
+                           "amont avant de valider le rapport de pilotage.")
             else:
-                st.success("✅ Tous les contrôles sont passés avec succès.")
+                st.success("✅ Contrôles 1 et 2 passés avec succès.")
+            st.caption("Le contrôle 3 (cohérence des volumes BLDD) et la répartition des charges/produits "
+                       "indirects sont disponibles juste en dessous, une fois le socle généré ci-dessous — "
+                       "ils restent accessibles sans qu'il soit nécessaire de re-générer le socle.")
 
             # ================================================
             # GÉNÉRATION DU PIVOT
@@ -355,9 +320,53 @@ elif page == "SOCLE EDITION":
             st.success("✅ SOCLE EDITION généré et paramétré.")
             st.dataframe(pivot.head(20))
 
-            # ================================================
-            # RÉPARTITION DES CHARGES ET PRODUITS INDIRECTS
-            # ================================================
+        # ================================================
+        # CONTRÔLE 3 : cohérence des volumes BLDD
+        # ================================================
+        # Placé HORS du bloc "if st.button(...)" : dans Streamlit, tout widget interactif
+        # (uploader, radio...) déclenche un nouveau passage du script où st.button() redevient
+        # False. S'il était imbriqué dans le bouton, l'interagir avec lui faisait disparaître
+        # tout le socle généré. Ce bloc lit donc les données depuis st.session_state et reste
+        # actif tant que le socle a été généré au moins une fois, sans jamais le refaire disparaître.
+        if "df_source_mappe" in st.session_state:
+            st.subheader("🔎 Contrôle de cohérence des volumes BLDD")
+            st.caption("Redéposez le relevé BLDD du mois pour vérifier que les écritures de CA, remises et commissions "
+                       "générées dans l'export analytique correspondent bien au relevé du diffuseur.")
+            fichier_bldd = st.file_uploader("Relevé BLDD (optionnel)", type=["xlsx", "csv"], key="controle_bldd")
+
+            if fichier_bldd:
+                try:
+                    df_source = st.session_state["df_source_mappe"]
+                    param_ctrl = st.session_state["param_comptes"]
+                    if fichier_bldd.name.endswith(".csv"):
+                        df_bldd = pd.read_csv(fichier_bldd)
+                    else:
+                        df_bldd = pd.read_excel(fichier_bldd)
+                    df_bldd.columns = df_bldd.columns.str.strip()
+                    # Le relevé BLDD attendu suit le format Ecritures_BLDD : Débit / Crédit par ISBN
+                    total_bldd = 0
+                    if "Débit" in df_bldd.columns and "Crédit" in df_bldd.columns:
+                        total_bldd = (df_bldd["Crédit"] - df_bldd["Débit"]).sum()
+                    comptes_ctrl = tuple(param_ctrl["ventes"] + param_ctrl["retours"] + param_ctrl["remises"])
+                    mask_ctrl = df_source["Compte"].astype(str).str.startswith(comptes_ctrl)
+                    total_export_bldd = (df_source[mask_ctrl]["Crédit"] - df_source[mask_ctrl]["Débit"]).sum()
+                    ecart_bldd = round(total_bldd - total_export_bldd, 2)
+                    if abs(ecart_bldd) > 0.01:
+                        st.error(f"❌ Écart entre le relevé BLDD ({total_bldd:,.2f} €) et l'export analytique "
+                                 f"({total_export_bldd:,.2f} €) : {ecart_bldd:,.2f} €")
+                    else:
+                        st.success(f"✅ Le relevé BLDD ({total_bldd:,.2f} €) correspond à l'export analytique.")
+                except Exception as e:
+                    st.warning(f"Impossible de lire le relevé BLDD : {e}")
+            else:
+                st.info("Aucun relevé BLDD déposé — ce contrôle sera ignoré pour cette génération.")
+
+        # ================================================
+        # RÉPARTITION DES CHARGES ET PRODUITS INDIRECTS
+        # ================================================
+        # Également hors du bouton, pour la même raison : le radio ci-dessous doit rester
+        # interactif sans faire disparaître le socle déjà généré.
+        if "df_pivot_brut" in st.session_state:
             st.subheader("📐 Répartition des charges et produits indirects")
             st.markdown("""
             Les charges de structure et certains produits (subventions, prestations non identifiables)
@@ -367,21 +376,22 @@ elif page == "SOCLE EDITION":
             masquer les titres non rentables derrière les titres porteurs.
             """)
 
+            pivot_brut = st.session_state["df_pivot_brut"]
             label_ci = st.session_state["labels_indirect"]["charges"]
             label_pi = st.session_state["labels_indirect"]["produits"]
 
-            masque_ci = pivot["Code_Analytique"].astype(str).str.strip() == label_ci
-            masque_pi = pivot["Code_Analytique"].astype(str).str.strip() == label_pi
-            total_charges_indirectes = (pivot[masque_ci]["Débit"] - pivot[masque_ci]["Crédit"]).sum()
-            total_produits_indirects = (pivot[masque_pi]["Crédit"] - pivot[masque_pi]["Débit"]).sum()
+            masque_ci = pivot_brut["Code_Analytique"].astype(str).str.strip() == label_ci
+            masque_pi = pivot_brut["Code_Analytique"].astype(str).str.strip() == label_pi
+            total_charges_indirectes = (pivot_brut[masque_ci]["Débit"] - pivot_brut[masque_ci]["Crédit"]).sum()
+            total_produits_indirects = (pivot_brut[masque_pi]["Crédit"] - pivot_brut[masque_pi]["Débit"]).sum()
 
             # Titres actifs = codes analytiques EDITION distincts, hors libellés indirects/génériques
             labels_exclus = {label_ci.upper(), label_pi.upper(), "CREATION GRAPHIQUE", ""}
             masque_titres = (
-                (pivot["Famille_Analytique"].astype(str).str.upper() == "EDITION")
-                & (~pivot["Code_Analytique"].astype(str).str.upper().isin(labels_exclus))
+                (pivot_brut["Famille_Analytique"].astype(str).str.upper() == "EDITION")
+                & (~pivot_brut["Code_Analytique"].astype(str).str.upper().isin(labels_exclus))
             )
-            titres_actifs = sorted(pivot.loc[masque_titres, "Code_Analytique"].astype(str).unique().tolist())
+            titres_actifs = sorted(pivot_brut.loc[masque_titres, "Code_Analytique"].astype(str).unique().tolist())
             nb_titres_actifs = len(titres_actifs)
 
             col_r1, col_r2, col_r3 = st.columns(3)
@@ -392,7 +402,8 @@ elif page == "SOCLE EDITION":
             repartir = st.radio(
                 "Souhaitez-vous répartir les charges et produits indirects sur les titres actifs ?",
                 ["Non, je garde une ligne 'indirecte' globale", "Oui, répartir sur les titres actifs"],
-                index=0
+                index=0,
+                key="repartir_radio"
             )
 
             inducteur = st.selectbox(
@@ -407,7 +418,7 @@ elif page == "SOCLE EDITION":
                 if nb_titres_actifs == 0:
                     st.error("❌ Aucun titre actif détecté dans la famille EDITION — répartition impossible.")
                 else:
-                    pivot_reparti = pivot[~masque_ci & ~masque_pi].copy()
+                    pivot_reparti = pivot_brut[~masque_ci & ~masque_pi].copy()
                     nouvelles_lignes = []
 
                     if total_charges_indirectes != 0:
@@ -460,10 +471,11 @@ elif page == "SOCLE EDITION":
                         pivot_reparti["Compte"].isin(["CHARGES INDIRECTES REPARTIES", "PRODUITS INDIRECTS REPARTIS"])
                     ].head(20))
             else:
-                st.session_state["df_pivot"] = pivot
+                st.session_state["df_pivot"] = pivot_brut
                 st.session_state["repartition_active"] = False
                 st.info("Les charges et produits indirects restent regroupés sur une ligne globale "
-                        "(non répartie sur les titres). Vous pourrez revenir sur ce choix en régénérant le socle.")
+                        "(non répartie sur les titres). Vous pourrez revenir sur ce choix à tout moment ci-dessus, "
+                        "sans avoir besoin de régénérer le socle.")
 
             st.info("""
             🎯 Le socle pivot est prêt !
@@ -1174,4 +1186,22 @@ elif page == "SYNTHESE GLOBALE":
         ca_brut = abs(df_ventes["Montant_net"].sum()) if not df_ventes.empty else 0
         total_retours = abs(df_ret["Montant_net"].sum()) if not df_ret.empty else 0
         total_remises = abs(df_rem["Montant_net"].sum()) if not df_rem.empty else 0
-        ca_net = ca_brut - t
+        ca_net = ca_brut - total_retours - total_remises
+        # Affichage tableau
+        df_summary = pd.DataFrame({
+            "Indicateur": ["CA brut", "Total retours", "Total remises", "CA net"],
+            "Montant": [ca_brut, total_retours, total_remises, ca_net]
+        })
+        st.subheader("Tableau récapitulatif")
+        st.dataframe(df_summary.style.format({"Montant":"{:,.0f} €"}))
+        # Graphique
+        fig_summary = px.bar(df_summary, x="Indicateur", y="Montant", text="Montant",
+                             title="📊 Synthèse financière globale")
+        fig_summary.update_traces(texttemplate='%{text:,.0f}', textposition='outside')
+        st.plotly_chart(fig_summary, use_container_width=True)
+
+# =====================
+# FOOTER / COPYRIGHT
+# =====================
+st.markdown("---")
+st.markdown("© 2025 Nicolas CUISSET - Créateur de l'application")
