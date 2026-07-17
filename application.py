@@ -136,10 +136,19 @@ elif page == "SOCLE EDITION":
         st.caption("Votre export peut contenir plusieurs familles analytiques en parallèle "
                    "(ex. EDITION pour les ISBN, COMMUNICATION pour la création graphique, "
                    "et la famille native « Types de dépenses / revenus » de votre logiciel). "
-                   "Mappez ici chaque paire de colonnes Famille / Code. La 1ère famille mappée "
-                   "sert de référence pour le pivot ISBN (EDITION) ; les suivantes ne servent "
+                   "Mappez ici chaque paire de colonnes Famille / Valeur analytique. La 1ère famille "
+                   "mappée sert de référence pour le pivot ISBN (EDITION) ; les suivantes ne servent "
                    "qu'aux contrôles de cohérence, pour qu'une ligne déjà affectée dans une "
                    "autre famille (ex. COMMUNICATION) ne soit pas signalée à tort comme non affectée.")
+        st.warning("""
+        ⚠️ **Attention à ne pas confondre deux colonnes qui se ressemblent, pour chaque famille :**
+        - **« Catégorie : \\<famille\\> »** → contient la vraie valeur affectée (ex. l'ISBN, "CHARGES INDIRECTES"…).
+          **C'est celle-ci qu'il faut choisir ci-dessous.**
+        - **« Code analytique : \\<famille\\> »** → identifiant technique interne de votre logiciel,
+          généralement **vide sur toutes les lignes**. La sélectionner par erreur fait remonter
+          énormément de faux positifs au contrôle de cohérence (charges/produits "non affectés"
+          alors qu'ils le sont).
+        """)
 
         nb_familles = st.number_input("Nombre de familles analytiques à mapper", min_value=1, max_value=3, value=1, step=1)
         familles_mapping = []
@@ -153,9 +162,12 @@ elif page == "SOCLE EDITION":
                     key=f"nom_famille_{i}"
                 )
             with fc2:
-                famille_col_i = st.selectbox(f"Colonne Famille {i+1} (optionnel)", [""] + columns, key=f"famille_col_{i}")
+                famille_col_i = st.selectbox(f"Colonne « Famille de catégories » {i+1} (optionnel)", [""] + columns, key=f"famille_col_{i}")
             with fc3:
-                code_col_i = st.selectbox(f"Colonne Code analytique {i+1} (optionnel)", [""] + columns, key=f"code_col_{i}")
+                code_col_i = st.selectbox(
+                    f"Colonne « Catégorie » (valeur analytique) {i+1} (optionnel)", [""] + columns, key=f"code_col_{i}",
+                    help="Choisissez la colonne « Catégorie : <famille> », PAS « Code analytique : <famille> » (souvent vide)."
+                )
             familles_mapping.append({"nom": nom_famille, "famille_col": famille_col_i, "code_col": code_col_i})
 
         st.subheader("Paramétrage des comptes clés")
@@ -1162,22 +1174,4 @@ elif page == "SYNTHESE GLOBALE":
         ca_brut = abs(df_ventes["Montant_net"].sum()) if not df_ventes.empty else 0
         total_retours = abs(df_ret["Montant_net"].sum()) if not df_ret.empty else 0
         total_remises = abs(df_rem["Montant_net"].sum()) if not df_rem.empty else 0
-        ca_net = ca_brut - total_retours - total_remises
-        # Affichage tableau
-        df_summary = pd.DataFrame({
-            "Indicateur": ["CA brut", "Total retours", "Total remises", "CA net"],
-            "Montant": [ca_brut, total_retours, total_remises, ca_net]
-        })
-        st.subheader("Tableau récapitulatif")
-        st.dataframe(df_summary.style.format({"Montant":"{:,.0f} €"}))
-        # Graphique
-        fig_summary = px.bar(df_summary, x="Indicateur", y="Montant", text="Montant",
-                             title="📊 Synthèse financière globale")
-        fig_summary.update_traces(texttemplate='%{text:,.0f}', textposition='outside')
-        st.plotly_chart(fig_summary, use_container_width=True)
-
-# =====================
-# FOOTER / COPYRIGHT
-# =====================
-st.markdown("---")
-st.markdown("© 2025 Nicolas CUISSET - Créateur de l'application")
+        ca_net = ca_brut - t
