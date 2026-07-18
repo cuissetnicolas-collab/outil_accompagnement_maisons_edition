@@ -1088,6 +1088,49 @@ elif page == "📖 Analyse par titre":
 
     st.divider()
 
+    # ================================================
+    # INDICATEUR 1 — MARGE PAR TITRE (détail et alertes)
+    # ================================================
+    st.subheader("📐 Indicateur 1 — Marge par titre")
+    st.caption("Marge brute = CA net − Charges directes · Marge nette = Marge brute − Quote-part charges "
+               "indirectes. Seuils : 🔴 marge brute < 0 % · 🟠 entre 0 et 10 % · 🟢 cible > 15 %.")
+    indic_marge = indicateurs.copy()
+    indic_marge["Taux marge brute (%)"] = np.where(indic_marge["CA net"] != 0, indic_marge["Marge brute"] / indic_marge["CA net"] * 100, 0.0)
+    indic_marge["Taux marge nette (%)"] = np.where(indic_marge["CA net"] != 0, indic_marge["Résultat net"] / indic_marge["CA net"] * 100, 0.0)
+    marge_brute_totale = indic_marge["Marge brute"].sum()
+    indic_marge["Contribution résultat global (%)"] = np.where(
+        marge_brute_totale != 0, indic_marge["Marge brute"] / marge_brute_totale * 100, 0.0
+    )
+    droits_par_isbn_mrg = df[df["Compte"].astype(str) == "604300000"].groupby("Code_Analytique")["Débit"].sum()
+    indic_marge["Droits d'auteurs période"] = indic_marge["Code_Analytique"].map(droits_par_isbn_mrg).fillna(0.0)
+    indic_marge["Résultat analytique"] = indic_marge["Résultat net"] - indic_marge["Droits d'auteurs période"]
+
+    def _alerte_marge_titre(t):
+        if t < 0:   return "🔴 Déficitaire"
+        if t < 10:  return "🟠 Fragile"
+        if t >= 15: return "🟢 Cible atteinte"
+        return "🟡 Intermédiaire"
+    indic_marge["Alerte marge"] = indic_marge["Taux marge brute (%)"].apply(_alerte_marge_titre)
+
+    mc1, mc2, mc3 = st.columns(3)
+    mc1.metric("🔴 Titres déficitaires (marge brute < 0 %)", int((indic_marge["Taux marge brute (%)"] < 0).sum()))
+    mc2.metric("🟠 Titres fragiles (0 – 10 %)", int(((indic_marge["Taux marge brute (%)"] >= 0) & (indic_marge["Taux marge brute (%)"] < 10)).sum()))
+    mc3.metric("🟢 Titres cible (> 15 %)", int((indic_marge["Taux marge brute (%)"] >= 15).sum()))
+
+    with st.expander("Voir le détail par titre (taux de marge, contribution, résultat analytique)"):
+        cols_montant_mrg = ["CA net", "Marge brute", "Résultat net", "Droits d'auteurs période", "Résultat analytique"]
+        cols_pct_mrg = ["Taux marge brute (%)", "Taux marge nette (%)", "Contribution résultat global (%)"]
+        aff_mrg = indic_marge[["Code_Analytique"] + cols_montant_mrg + cols_pct_mrg + ["Alerte marge"]].sort_values("Marge brute", ascending=False)
+        formats_mrg = {c: "{:,.0f} €" for c in cols_montant_mrg}
+        formats_mrg.update({c: "{:.1f} %" for c in cols_pct_mrg})
+        st.dataframe(aff_mrg.style.format(formats_mrg), use_container_width=True, hide_index=True)
+        var_stock_mrg = df[df["Compte"].astype(str).str.startswith(("603", "713"))]
+        variation_stock_mrg = (var_stock_mrg["Crédit"] - var_stock_mrg["Débit"]).sum()
+        st.caption(f"ℹ️ Variation de stock globale (comptes 603/713, non ventilée par titre) : "
+                   f"**{variation_stock_mrg:,.0f} €**.")
+
+    st.divider()
+
     st.markdown("Ou sélectionnez directement un titre puis ouvrez sa fiche détaillée — elle s'affiche "
                 "dans une fenêtre dédiée avec un mini SIG (soldes intermédiaires de gestion, charges "
                 "fixes imputées incluses) et son évolution mensuelle.")
@@ -1236,6 +1279,13 @@ elif page == "💰 Trésorerie prévisionnelle":
     flux_net_total = table.sum()
     treso_real = tresorerie_ouverture + flux_net_total.cumsum()
 
+    # Mis en session pour réutilisation par le Référentiel des indicateurs de pilotage
+    # (indicateur 2 — Trésorerie prévisionnelle), sans avoir à tout recalculer.
+    st.session_state["treso_table"] = table
+    st.session_state["treso_real"] = treso_real
+    st.session_state["treso_ouverture"] = tresorerie_ouverture
+    st.session_state["treso_mois_realises"] = mois_realises
+
     _MOIS_FR = ["", "Janv.", "Févr.", "Mars", "Avr.", "Mai", "Juin", "Juil.", "Août", "Sept.", "Oct.", "Nov.", "Déc."]
     def mois_label(p):
         return f"{_MOIS_FR[p.month]} {p.year}"
@@ -1300,6 +1350,7 @@ elif page == "💰 Trésorerie prévisionnelle":
             "Central":    construire_projection(croissance_cent, evolution_charges),
             "Pessimiste": construire_projection(croissance_pess, evolution_charges),
         }
+        st.session_state["treso_scenarios"] = scenarios
         courbes = {}
         for nom, proj in scenarios.items():
             flux_proj = proj.sum()
@@ -1356,6 +1407,73 @@ elif page == "💰 Trésorerie prévisionnelle":
     st.download_button("📥 Exporter le tableau de flux de trésorerie (Excel)", buffer,
                         file_name="Tableau_Flux_Tresorerie.xlsx",
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+    # ================================================
+    # INDICATEUR 2 — SOUS-INDICATEURS DE PILOTAGE
+    # ================================================
+    st.divider()
+    with st.expander("📐 Sous-indicateurs de pilotage (BFR éditorial, DSO BLDD, seuil de CA, cumul 6 mois)"):
+        seuil_securite = st.number_input(
+            "Seuil de sécurité défini avec le dirigeant (€)", value=0.0, step=500.0,
+            help="Seuil orange : la trésorerie prévisionnelle du mois à venir passe sous ce montant.", key="ind2_seuil_secu"
+        )
+        solde_prev_prochain_mois = None
+        if horizon > 0 and scenarios:
+            flux_central_i2 = scenarios["Central"].sum()
+            if len(flux_central_i2) > 0:
+                solde_prev_prochain_mois = treso_real.iloc[-1] + flux_central_i2.iloc[0]
+        if solde_prev_prochain_mois is not None:
+            if solde_prev_prochain_mois < 0:
+                alerte_i2 = "🔴 Tension critique"
+            elif solde_prev_prochain_mois < seuil_securite:
+                alerte_i2 = "🟠 Sous le seuil de sécurité"
+            else:
+                alerte_i2 = "🟢 Normal"
+            st.metric("Solde prévisionnel — mois à venir", f"{treso_real.iloc[-1] + flux_central_i2.iloc[0]:,.0f} €", delta=alerte_i2)
+
+        col_bfr1, col_bfr2 = st.columns(2)
+        cpt_fabrication_i2 = col_bfr1.text_input("Comptes fabrication (décaissements)", value="604,605", key="ind2_cpt_fab")
+        cpt_bldd_i2 = col_bfr2.text_input("Compte client BLDD (encaissements)", value="411100011", key="ind2_cpt_bldd")
+        prefixes_fab_i2 = tuple(x.strip() for x in cpt_fabrication_i2.split(",") if x.strip())
+        decaissements_fab_i2 = df_tr[df_tr["Compte"].str.startswith(prefixes_fab_i2)]["Débit"].sum() if prefixes_fab_i2 else 0.0
+        df_bldd_i2 = df_tr[df_tr["Compte"] == cpt_bldd_i2]
+        encaissements_bldd_i2 = df_bldd_i2["Crédit"].sum()
+        bfr_editorial = decaissements_fab_i2 - encaissements_bldd_i2
+        st.metric("BFR éditorial (décaissements fabrication − encaissements BLDD)", f"{bfr_editorial:,.0f} €")
+
+        if not df_bldd_i2.empty and df_bldd_i2["Débit"].sum() > 0:
+            solde_client_bldd = df_bldd_i2["Débit"].sum() - df_bldd_i2["Crédit"].sum()
+            ca_facture_bldd = df_bldd_i2["Débit"].sum()
+            nb_jours_periode_i2 = (df_tr["Date"].dropna().max() - df_tr["Date"].dropna().min()).days or 365
+            dso_bldd = solde_client_bldd / ca_facture_bldd * nb_jours_periode_i2
+            st.metric("Délai moyen d'encaissement BLDD (DSO estimé)", f"{dso_bldd:,.0f} jours")
+            st.caption("Estimé par : solde du compte client BLDD à date / CA facturé BLDD sur la période × nombre "
+                       "de jours de la période (proxy DSO standard).")
+        else:
+            st.caption("ℹ️ Aucune écriture trouvée sur le compte client BLDD indiqué — DSO non calculable.")
+
+        label_ci_i2 = st.session_state.get("labels_indirect", {}).get("charges", "CHARGES INDIRECTES")
+        masque_ci_i2 = df_tr["Compte"].astype(str).str.strip() == label_ci_i2
+        charges_fixes_totales_i2 = (df_tr[masque_ci_i2]["Débit"] - df_tr[masque_ci_i2]["Crédit"]).sum()
+        if charges_fixes_totales_i2 == 0 and "df_pivot" in st.session_state:
+            df_repartie = st.session_state["df_pivot"]
+            masque_cfi_i2 = df_repartie["Compte"].astype(str) == "CHARGES INDIRECTES REPARTIES"
+            charges_fixes_totales_i2 = df_repartie[masque_cfi_i2]["Débit"].sum()
+        nb_mois_periode_i2 = max(1, round((df_tr["Date"].dropna().max() - df_tr["Date"].dropna().min()).days / 30.44))
+        charges_fixes_mensuelles_i2 = charges_fixes_totales_i2 / nb_mois_periode_i2
+        df_v_i2 = df_tr[df_tr["Compte"].str.startswith(("701",))]
+        df_rem_i2 = df_tr[df_tr["Compte"].str.startswith(("7091",))]
+        taux_remise_moyen_i2 = (df_rem_i2["Débit"].sum() / df_v_i2["Crédit"].sum()) if df_v_i2["Crédit"].sum() else 0.0
+        seuil_mensuel_ca = (charges_fixes_mensuelles_i2 / (1 - taux_remise_moyen_i2)
+                            if taux_remise_moyen_i2 < 1 else charges_fixes_mensuelles_i2)
+        st.metric("Seuil mensuel de CA (charges fixes / (1 − taux de remise moyen))", f"{seuil_mensuel_ca:,.0f} €")
+        st.caption("⚠️ Les comptes ventes (701) et remises (7091) utilisés ici sont ceux du secteur livre standard "
+                   "— ajustez-les via ⚙️ Paramétrage analytique si les vôtres diffèrent.")
+
+        if horizon > 0 and scenarios:
+            st.markdown("**Cumul de trésorerie sur 6 mois** _(scénario central)_")
+            cumul_6m = treso_real.iloc[-1] + scenarios["Central"].sum().iloc[:6].cumsum()
+            st.line_chart(cumul_6m)
 
 # =====================
 # DROITS D'AUTEURS
@@ -1926,6 +2044,91 @@ elif page == "✍️ Droits d'auteurs":
                     key="export_reel_periode"
                 )
 
+                # ================================================
+                # INDICATEUR 4 — SOUS-INDICATEURS DE PILOTAGE (à-valoir, couverture, prévisionnel)
+                # ================================================
+                st.divider()
+                with st.expander("📐 Sous-indicateurs de pilotage (à-valoir, couverture, prévisionnel 6 mois)"):
+                    st.caption("Calculés sur l'historique complet du grand livre (et non la seule période de "
+                               "déclaration ci-dessus), car l'amortissement d'un à-valoir est un suivi cumulatif.")
+                    df_pivot_complet = st.session_state["df_pivot"].copy()
+                    df_pivot_complet["Date"] = pd.to_datetime(df_pivot_complet["Date"], errors="coerce")
+
+                    col_i4a, col_i4b = st.columns(2)
+                    cpt_avance4 = col_i4a.text_input("Compte avances / à-valoirs", value="409600", key="ind4_cpt_avance")
+                    taux_contractuel4 = col_i4b.number_input("Taux contractuel par défaut (%)", value=10.0, step=0.5, key="ind4_taux") / 100
+
+                    avance_debit_isbn = df_pivot_complet[df_pivot_complet["Compte"].astype(str) == cpt_avance4].groupby("Code_Analytique")["Débit"].sum()
+                    avance_credit_isbn = df_pivot_complet[df_pivot_complet["Compte"].astype(str) == cpt_avance4].groupby("Code_Analytique")["Crédit"].sum()
+                    premiere_date_avance = df_pivot_complet[
+                        (df_pivot_complet["Compte"].astype(str) == cpt_avance4) & (df_pivot_complet["Débit"] > 0)
+                    ].groupby("Code_Analytique")["Date"].min()
+                    droits_bruts_complet = df_pivot_complet[df_pivot_complet["Compte"].astype(str) == compte_droits_bruts].groupby("Code_Analytique")["Débit"].sum()
+
+                    isbns_avalent = sorted(set(avance_debit_isbn.index) | set(droits_bruts_complet.index))
+                    isbns_avalent = [i for i in isbns_avalent if str(i).strip() not in ("", "CHARGES INDIRECTES", "PRODUITS INDIRECTS")]
+
+                    if isbns_avalent:
+                        indic4 = pd.DataFrame({"Code_Analytique": isbns_avalent}).set_index("Code_Analytique")
+                        indic4["Droits comptabilisés (réel, historique)"] = droits_bruts_complet.reindex(indic4.index, fill_value=0.0)
+                        indic4["À-valoir initial (cumul débit)"] = avance_debit_isbn.reindex(indic4.index, fill_value=0.0)
+                        indic4["Droits cumulés versés (cumul crédit)"] = avance_credit_isbn.reindex(indic4.index, fill_value=0.0)
+                        indic4["À-valoir restant à amortir"] = indic4["À-valoir initial (cumul débit)"] - indic4["Droits cumulés versés (cumul crédit)"]
+                        indic4["Taux de couverture (%)"] = np.where(
+                            indic4["À-valoir initial (cumul débit)"] > 0,
+                            indic4["Droits cumulés versés (cumul crédit)"] / indic4["À-valoir initial (cumul débit)"] * 100, 100.0
+                        )
+                        mois_ecoules = premiere_date_avance.reindex(indic4.index).apply(
+                            lambda d: (pd.Timestamp.today() - d).days / 30.44 if pd.notna(d) else np.nan
+                        )
+
+                        def _alerte_avalent(isbn):
+                            restant = indic4.loc[isbn, "À-valoir restant à amortir"]
+                            couverture = indic4.loc[isbn, "Taux de couverture (%)"]
+                            ecoule = mois_ecoules.get(isbn, np.nan)
+                            if pd.notna(ecoule) and restant > 0 and ecoule > 12:
+                                return "🔴 À-valoir non amorti > 12 mois"
+                            if pd.notna(ecoule) and couverture < 50 and ecoule > 6:
+                                return "🟠 Couverture < 50 % après 6 mois"
+                            return "🟢 Normal"
+                        indic4["Alerte"] = [_alerte_avalent(i) for i in indic4.index]
+
+                        df_pivot_complet["Mois"] = df_pivot_complet["Date"].dt.to_period("M")
+                        v_i4 = df_pivot_complet[df_pivot_complet["Compte"].astype(str).str.startswith("701")].groupby("Mois")["Crédit"].sum()
+                        r_i4 = df_pivot_complet[df_pivot_complet["Compte"].astype(str).str.startswith("709")].groupby("Mois")["Débit"].sum()
+                        ca_net_i4 = v_i4.sub(r_i4, fill_value=0).sort_index()
+                        ca_net_total4 = ca_net_i4.sum()
+
+                        ia1, ia2, ia3 = st.columns(3)
+                        ia1.metric("Droits bruts comptabilisés (historique)", f"{indic4['Droits comptabilisés (réel, historique)'].sum():,.0f} €")
+                        ia2.metric("À-valoir restant à amortir (total)", f"{indic4['À-valoir restant à amortir'].sum():,.0f} €")
+                        taux_moyen_droits_ca4 = (indic4["Droits comptabilisés (réel, historique)"].sum() / ca_net_total4 * 100) if ca_net_total4 else 0.0
+                        ia3.metric("Taux moyen droits d'auteurs / CA net", f"{taux_moyen_droits_ca4:.1f} %" if ca_net_total4 else "N/A")
+
+                        formats_i4 = {c: "{:,.0f} €" for c in ["Droits comptabilisés (réel, historique)", "À-valoir initial (cumul débit)",
+                                                                "Droits cumulés versés (cumul crédit)", "À-valoir restant à amortir"]}
+                        formats_i4["Taux de couverture (%)"] = "{:.1f} %"
+                        st.dataframe(
+                            indic4.reset_index().rename(columns={"index": "Code_Analytique"}).style.format(formats_i4),
+                            use_container_width=True, hide_index=True
+                        )
+
+                        base_i4 = ca_net_i4.iloc[-3:].mean() if len(ca_net_i4) >= 3 else (ca_net_i4.mean() if len(ca_net_i4) else 0.0)
+                        droits_prev_6mois = base_i4 * 6 * taux_contractuel4
+                        st.metric("Droits prévisionnels sur 6 mois (estimation, taux contractuel appliqué au CA net moyen)",
+                                  f"{droits_prev_6mois:,.0f} €")
+
+                        echeance_semestrielle = pd.Timestamp.today() >= pd.Timestamp("2027-12-20")
+                        st.caption(
+                            "**Échéances :** déclaration trimestrielle URSSAF + reddition " +
+                            ("**semestrielle** (accord interprofessionnel CPE-LAP-SNE du 20/12/2022, applicable depuis le 20/12/2027)"
+                             if echeance_semestrielle else
+                             "**annuelle** (passera à semestrielle à compter du 20/12/2027, conformément à l'accord "
+                             "interprofessionnel CPE-LAP-SNE du 20/12/2022)")
+                        )
+                    else:
+                        st.info("Aucune écriture trouvée sur le compte d'avances/à-valoirs indiqué.")
+
     # ══════════════════════════════════════════════
     # ONGLET 5 — RELEVÉS PAR AUTEUR
     # ══════════════════════════════════════════════
@@ -2097,6 +2300,101 @@ elif page == "📦 Retours & Remises":
             st.subheader("Retours par titre")
             st.dataframe(ret_isbn.style.format({"Montant_net": "{:,.0f} €"}), hide_index=True)
 
+    # ================================================
+    # INDICATEUR 3 — SOUS-INDICATEURS DE PILOTAGE
+    # ================================================
+    st.divider()
+    with st.expander("📐 Sous-indicateurs de pilotage (provision, évolution, collection, méthode Parly)"):
+        TAUX_TVA_LIVRE = 0.055  # taux réduit applicable au livre en France
+        provision_retours = 0.10 * total_ventes * (1 + TAUX_TVA_LIVRE)
+        ventes_nettes_globales = total_ventes - total_retours - provision_retours
+        if taux_ret > 30:
+            alerte_ref3 = "🔴 Mise en place excessive"
+        elif taux_ret >= 20:
+            alerte_ref3 = "🟠 À surveiller"
+        else:
+            alerte_ref3 = "🟢 Cible sectorielle atteinte"
+        r1, r2, r3 = st.columns(3)
+        r1.metric("Taux de retour (seuils référentiel 20 %/30 %)", f"{taux_ret:.1f} %", delta=alerte_ref3)
+        r2.metric("Provision pour retours futurs (10 % ventes brutes TTC)", f"{provision_retours:,.0f} €")
+        r3.metric("Ventes nettes (après retours + provision)", f"{ventes_nettes_globales:,.0f} €")
+
+        idx_collection = next((i for i, n in enumerate(st.session_state.get("noms_familles_actives", []))
+                                if "collection" in n.lower()), None)
+        if idx_collection is not None:
+            codes_cols_ret = st.session_state.get("codes_cols", [])
+            col_collection = codes_cols_ret[idx_collection] if idx_collection < len(codes_cols_ret) else None
+            if col_collection and col_collection in df.columns and not df_v.empty:
+                st.markdown("**Taux de retour par collection**")
+                v_coll = df_v.groupby(col_collection)["Crédit"].sum()
+                r_coll = df_ret.groupby(col_collection)["Montant_net"].sum().abs() if not df_ret.empty else pd.Series(dtype=float)
+                taux_coll = (r_coll / v_coll * 100).fillna(0).rename("Taux de retour (%)")
+                st.dataframe(taux_coll.to_frame().style.format("{:.1f} %"), use_container_width=True)
+        else:
+            st.caption("ℹ️ Aucune famille analytique « Collection » mappée — mappable dans ⚙️ Paramétrage "
+                       "analytique si votre export le permet.")
+
+        st.markdown("**Évolution du taux de retour — M vs M-1 vs M-12**")
+        v_m3 = df_v.groupby("Mois")["Crédit"].sum() if not df_v.empty else pd.Series(dtype=float)
+        r_m3 = df_ret.groupby("Mois")["Montant_net"].sum().abs() if not df_ret.empty else pd.Series(dtype=float)
+        taux_m3 = (r_m3 / v_m3 * 100).dropna().sort_index()
+        if len(taux_m3) >= 2:
+            mois_index_dt = pd.PeriodIndex(taux_m3.index, freq="M")
+            taux_m3.index = mois_index_dt
+            dernier_m3 = mois_index_dt[-1]
+            m_moins_1_3 = dernier_m3 - 1
+            m_moins_12_3 = dernier_m3 - 12
+            rc1, rc2, rc3 = st.columns(3)
+            rc1.metric(f"M ({dernier_m3})", f"{taux_m3.iloc[-1]:.1f} %")
+            rc2.metric(f"M-1 ({m_moins_1_3})", f"{taux_m3.get(m_moins_1_3):.1f} %" if m_moins_1_3 in taux_m3.index else "N/A")
+            rc3.metric(f"M-12 ({m_moins_12_3})", f"{taux_m3.get(m_moins_12_3):.1f} %" if m_moins_12_3 in taux_m3.index else "N/A")
+            st.line_chart(taux_m3)
+        else:
+            st.caption("Historique insuffisant pour comparer M / M-1 / M-12.")
+
+        st.markdown("**Référentiel complémentaire (optionnel)** — pour le coût financier des retours et le "
+                    "ratio ventes nettes / tirage (méthode Parly). Laissez à 0 si non disponible.")
+        titres_ret = sorted(filtrer_isbn_reels(df)["Code_Analytique"].astype(str).unique().tolist())
+        if "referentiel_titres_manuel" not in st.session_state or set(st.session_state["referentiel_titres_manuel"]["ISBN"]) != set(titres_ret):
+            st.session_state["referentiel_titres_manuel"] = pd.DataFrame({
+                "ISBN": titres_ret, "PPHT (€)": [0.0] * len(titres_ret),
+                "Coût fabrication unitaire (€)": [0.0] * len(titres_ret), "Tirage initial (ex.)": [0] * len(titres_ret),
+            })
+        ref_titres_ret = st.data_editor(st.session_state["referentiel_titres_manuel"], use_container_width=True,
+                                        num_rows="fixed", key="editor_ref_titres_retours", hide_index=True)
+        st.session_state["referentiel_titres_manuel"] = ref_titres_ret
+
+        if titres_ret and not df_ret_isbn.empty:
+            params_ret = st.session_state.get("param_comptes", {})
+            indic_ret = calculer_indicateurs_titres(df, params_ret, titres_ret)
+            ref_idx_ret = ref_titres_ret.set_index("ISBN")
+            indic3_ret = indic_ret[["Code_Analytique", "Ventes HT", "Retours"]].set_index("Code_Analytique").join(ref_idx_ret, how="left").fillna(0)
+            indic3_ret["Coût financier des retours (€)"] = np.where(
+                indic3_ret["PPHT (€)"] > 0,
+                indic3_ret["Retours"] * (1 - indic3_ret["Coût fabrication unitaire (€)"] / indic3_ret["PPHT (€)"]),
+                0.0
+            )
+            indic3_ret["Nb exemplaires vendus nets (est.)"] = np.where(
+                indic3_ret["PPHT (€)"] > 0, (indic3_ret["Ventes HT"] - indic3_ret["Retours"]) / indic3_ret["PPHT (€)"], 0.0
+            )
+            indic3_ret["Ratio ventes nettes / tirage (Parly)"] = np.where(
+                indic3_ret["Tirage initial (ex.)"] > 0,
+                indic3_ret["Nb exemplaires vendus nets (est.)"] / indic3_ret["Tirage initial (ex.)"], 0.0
+            )
+            indic3_ret["Alerte Parly"] = np.where(
+                (indic3_ret["Tirage initial (ex.)"] > 0) & (indic3_ret["Ratio ventes nettes / tirage (Parly)"] < 0.65),
+                "🔴 Sous le seuil critique (0,65)", "—"
+            )
+            st.markdown("**Coût financier des retours et ratio Parly par titre**")
+            aff3_ret = indic3_ret[["Retours", "Coût financier des retours (€)", "Nb exemplaires vendus nets (est.)",
+                                   "Tirage initial (ex.)", "Ratio ventes nettes / tirage (Parly)", "Alerte Parly"]]
+            st.dataframe(aff3_ret.style.format({"Retours": "{:,.0f} €", "Coût financier des retours (€)": "{:,.0f} €",
+                                                "Nb exemplaires vendus nets (est.)": "{:,.0f}",
+                                                "Ratio ventes nettes / tirage (Parly)": "{:.2f}"}),
+                        use_container_width=True)
+            st.caption("Le nombre d'exemplaires retournés/vendus est estimé en divisant les montants € par le "
+                      "PPHT saisi ci-dessus (la comptabilité ne porte que des montants, pas des quantités).")
+
 # =====================
 # SYNTHÈSE FINANCIÈRE
 # =====================
@@ -2132,6 +2430,71 @@ elif page == "📊 Synthèse financière":
     libelles = ["CA brut", "Retours", "Remises", "CA net", "Charges", "Résultat net"]
     df_summary = pd.DataFrame({"Poste": libelles, "Montant (€)": soldes})
 
+    # ================================================
+    # 🚦 INDICATEURS CLÉS DE PILOTAGE (référentiel de la mission)
+    # ================================================
+    st.subheader("🚦 Indicateurs clés de pilotage")
+    st.caption("Vue d'ensemble des 4 indicateurs du référentiel — le détail et les sous-indicateurs sont "
+               "disponibles dans leur module respectif (📖 Analyse par titre, 💰 Trésorerie prévisionnelle, "
+               "📦 Retours & Remises, ✍️ Droits d'auteurs).")
+
+    ic1, ic2, ic3, ic4 = st.columns(4)
+
+    # --- Indicateur 1 — Marge par titre ---
+    titres_synth = sorted(filtrer_isbn_reels(df)["Code_Analytique"].astype(str).unique().tolist())
+    if titres_synth:
+        indic1_synth = calculer_indicateurs_titres(df, params, titres_synth)
+        taux_mb_synth = np.where(indic1_synth["CA net"] != 0, indic1_synth["Marge brute"] / indic1_synth["CA net"] * 100, 0.0)
+        nb_deficit = int((taux_mb_synth < 0).sum())
+        with ic1:
+            st.markdown("**1️⃣ Marge par titre**")
+            st.metric("Titres déficitaires", nb_deficit,
+                      delta="🔴 À traiter" if nb_deficit else "🟢 Aucun", delta_color="off")
+    else:
+        with ic1:
+            st.markdown("**1️⃣ Marge par titre**")
+            st.caption("Aucun titre actif.")
+
+    # --- Indicateur 2 — Trésorerie prévisionnelle ---
+    with ic2:
+        st.markdown("**2️⃣ Trésorerie prévisionnelle**")
+        if "treso_real" in st.session_state:
+            treso_real_synth = st.session_state["treso_real"]
+            scenarios_synth = st.session_state.get("treso_scenarios", {})
+            if scenarios_synth and len(scenarios_synth["Central"].sum()) > 0:
+                solde_m1 = treso_real_synth.iloc[-1] + scenarios_synth["Central"].sum().iloc[0]
+                alerte_synth2 = "🔴 Négatif" if solde_m1 < 0 else "🟢 Positif"
+                st.metric("Solde prévisionnel (M+1)", f"{solde_m1:,.0f} €", delta=alerte_synth2, delta_color="off")
+            else:
+                st.metric("Trésorerie de clôture (réalisé)", f"{treso_real_synth.iloc[-1]:,.0f} €")
+        else:
+            st.caption("Consultez 💰 Trésorerie prévisionnelle.")
+
+    # --- Indicateur 3 — Taux de retour ---
+    taux_retour_synth = (total_retours / ca_brut * 100) if ca_brut else 0.0
+    if taux_retour_synth > 30:
+        alerte_synth3 = "🔴 Excessif"
+    elif taux_retour_synth >= 20:
+        alerte_synth3 = "🟠 À surveiller"
+    else:
+        alerte_synth3 = "🟢 Normal"
+    with ic3:
+        st.markdown("**3️⃣ Taux de retour**")
+        st.metric("Taux de retour global", f"{taux_retour_synth:.1f} %", delta=alerte_synth3, delta_color="off")
+
+    # --- Indicateur 4 — Droits d'auteurs ---
+    with ic4:
+        st.markdown("**4️⃣ Droits d'auteurs**")
+        avance_debit_synth = df[df["Compte"].astype(str) == "409600"]["Débit"].sum()
+        avance_credit_synth = df[df["Compte"].astype(str) == "409600"]["Crédit"].sum()
+        avalent_restant_synth = avance_debit_synth - avance_credit_synth
+        if avance_debit_synth > 0:
+            st.metric("À-valoir restant à amortir", f"{avalent_restant_synth:,.0f} €")
+        else:
+            st.caption("Aucune écriture sur le compte 409600.")
+
+    st.divider()
+
     col1, col2 = st.columns([1.2, 1])
     with col1:
         st.subheader("Compte de résultat synthétique")
@@ -2162,6 +2525,26 @@ elif page == "📊 Synthèse financière":
     st.download_button("📥 Exporter la synthèse (Excel)", buffer,
                         file_name="Synthese_Financiere.xlsx",
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+    st.divider()
+    st.markdown("##### 📋 Référentiel des 4 indicateurs de pilotage")
+    st.caption("Définition, formule et seuil d'alerte de chaque indicateur — le détail chiffré est disponible "
+               "dans le module correspondant.")
+    recap = pd.DataFrame([
+        {"#": 1, "Indicateur": "Marge par titre", "Formule simplifiée": "CA net − Charges directes − Variation stock",
+         "Seuil alerte": "Marge brute < 0 % → alerte rouge", "Source principale": "Export analytique (701/709/6xx)",
+         "Module détaillé": "📖 Analyse par titre"},
+        {"#": 2, "Indicateur": "Trésorerie prévisionnelle", "Formule simplifiée": "Encaissements prévisionnels − Décaissements",
+         "Seuil alerte": "Solde prévisionnel < 0 → alerte rouge", "Source principale": "BLDD + Compta générale + Programme éditorial",
+         "Module détaillé": "💰 Trésorerie prévisionnelle"},
+        {"#": 3, "Indicateur": "Taux de retour", "Formule simplifiée": "Retours / Ventes brutes",
+         "Seuil alerte": "Taux > 30 % → alerte rouge", "Source principale": "Relevé BLDD mensuel",
+         "Module détaillé": "📦 Retours & Remises"},
+        {"#": 4, "Indicateur": "Droits d'auteurs", "Formule simplifiée": "Ventes nettes PPHT × 10 %",
+         "Seuil alerte": "À-valoir non amorti > 12 mois", "Source principale": "BLDD + Contrats auteurs + Compte 409600",
+         "Module détaillé": "✍️ Droits d'auteurs"},
+    ])
+    st.dataframe(recap, use_container_width=True, hide_index=True)
 
 # =====================
 # ASSISTANT IA — 3 NIVEAUX
