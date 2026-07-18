@@ -262,6 +262,28 @@ def afficher_fiche_titre(isbn_sel, df, params):
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                         key=f"export_fiche_{isbn_sel}")
 
+def resoudre_mapping_auteurs(df):
+    """Si une famille analytique nommée "AUTEUR" a été mappée dans ⚙️ Paramétrage analytique
+    (en plus d'EDITION/COMMUNICATION/Types de dépenses), on en déduit directement la
+    correspondance ISBN → auteur depuis la comptabilité elle-même, sans référentiel séparé.
+    Retourne un dict {isbn: auteur} (vide si aucune famille de ce type n'est configurée)."""
+    noms = st.session_state.get("noms_familles_actives", [])
+    codes_cols = st.session_state.get("codes_cols", [])
+    if not noms or not codes_cols or df is None or "Code_Analytique" not in df.columns:
+        return {}
+    idx_auteur = next((i for i, n in enumerate(noms) if "auteur" in n.lower()), None)
+    if idx_auteur is None or idx_auteur >= len(codes_cols):
+        return {}
+    col_auteur = codes_cols[idx_auteur]
+    if col_auteur not in df.columns or col_auteur == "Code_Analytique":
+        return {}
+    sous = df[(df["Code_Analytique"].astype(str).str.strip() != "") & (df[col_auteur].astype(str).str.strip() != "")]
+    if sous.empty:
+        return {}
+    # Auteur le plus fréquent par ISBN, au cas où une incohérence ponctuelle existerait.
+    mapping = sous.groupby("Code_Analytique")[col_auteur].agg(lambda s: s.mode().iloc[0] if not s.mode().empty else s.iloc[0])
+    return mapping.to_dict()
+
 def calculer_indicateurs_titres(df, params, titres):
     """Calcule, pour chaque titre actif, CA brut/net, charges variables, charges fixes
     imputées (quote-part de répartition des charges indirectes sur ce titre, si activée)
@@ -567,11 +589,19 @@ elif page == "⚙️ Paramétrage analytique":
     st.subheader("Familles analytiques")
     st.caption("Votre export peut contenir plusieurs familles analytiques en parallèle "
                "(ex. EDITION pour les ISBN, COMMUNICATION pour la création graphique, "
-               "et la famille native « Types de dépenses / revenus » de votre logiciel). "
+               "la famille native « Types de dépenses / revenus » de votre logiciel, et une "
+               "éventuelle famille AUTEUR). "
                "Mappez ici chaque paire de colonnes Famille / Valeur analytique. La 1ère famille "
                "mappée sert de référence pour le pivot ISBN (EDITION) ; les suivantes ne servent "
                "qu'aux contrôles de cohérence, pour qu'une ligne déjà affectée dans une autre "
                "famille (ex. COMMUNICATION) ne soit pas signalée à tort comme non affectée.")
+    st.info("""
+    ✍️ **Famille AUTEUR (recommandé) :** si votre logiciel comptable le permet, créez une 4e famille
+    analytique nommée **AUTEUR**, taguée sur les mêmes lignes que la famille EDITION (chaque écriture
+    de droits d'auteur porte alors à la fois son ISBN et son auteur). Une fois mappée ici, le module
+    **✍️ Droits d'auteurs → 📒 Réel (comptabilisé)** détecte automatiquement la correspondance ISBN → auteur
+    directement depuis la comptabilité, sans référentiel à ressaisir séparément.
+    """)
     st.warning("""
     ⚠️ **Attention à ne pas confondre deux colonnes qui se ressemblent, pour chaque famille :**
     - **« Catégorie : \\<famille\\> »** → contient la vraie valeur affectée (ex. l'ISBN, "CHARGES INDIRECTES"…).
@@ -581,9 +611,9 @@ elif page == "⚙️ Paramétrage analytique":
       de faux positifs au contrôle de cohérence.
     """)
 
-    nb_familles = st.number_input("Nombre de familles analytiques à mapper", min_value=1, max_value=3, value=1, step=1)
+    nb_familles = st.number_input("Nombre de familles analytiques à mapper", min_value=1, max_value=4, value=1, step=1)
     familles_mapping = []
-    noms_suggestion = ["EDITION", "COMMUNICATION", "Types de dépenses / revenus"]
+    noms_suggestion = ["EDITION", "COMMUNICATION", "Types de dépenses / revenus", "AUTEUR"]
     for i in range(int(nb_familles)):
         fc1, fc2, fc3 = st.columns([1, 1, 1])
         with fc1:
@@ -1175,31 +1205,59 @@ elif page == "✍️ Droits d'auteurs":
     st.info("""
     **Comment fonctionne ce module ?**
 
-    1. **Onglet Référentiel** : saisissez vos contrats (auteur, ISBN, taux, paliers, répartition co-auteurs)
-    2. **Onglet Calcul** : les droits sont calculés automatiquement depuis le SOCLE EDITION
-    3. **Onglet URSSAF** : calcul du précompte (CSG/CRDS + formation pro) à reverser à l'URSSAF
-    4. **Onglet Relevés** : relevé de compte par auteur, exportable en Excel
+    Les droits d'auteurs sont **déjà calculés et provisionnés dans votre comptabilité analytique**
+    (droits bruts, précompte URSSAF, contribution diffuseur, net dû) — ce module ne fait pas de
+    double calcul, il fait remonter titre par titre, puis auteur par auteur, ce qui est réellement
+    comptabilisé. Un simulateur reste disponible pour estimer un montant *avant* la provision de clôture.
+
+    1. **📋 Référentiel** : correspondance ISBN ↔ auteur (détectée automatiquement si vous utilisez une
+       famille analytique AUTEUR ; à défaut, à compléter manuellement) + paramètres du simulateur
+    2. **🧮 Simulateur** : estimation par paliers, à titre indicatif avant comptabilisation
+    3. **🏛️ Simulateur URSSAF** : estimation du précompte, à titre indicatif
+    4. **📒 Réel (comptabilisé)** : montants réellement provisionnés, lus directement dans le grand livre
+    5. **📄 Relevés par auteur** : relevé de compte par auteur (priorité au réel), exportable en Excel
     """)
 
     # ──────────────────────────────────────────────
     # INITIALISATION DU RÉFÉRENTIEL EN SESSION
     # Structure : liste de dicts {auteur, isbn, titre, taux_base, paliers, part_auteur}
     # paliers : liste de {seuil, taux} — ex. [{seuil:0, taux:10}, {seuil:10000, taux:12}]
+    # Ce référentiel sert (a) de repli si aucune famille analytique AUTEUR n'est mappée, et
+    # (b) au simulateur par paliers (taux, assiette, répartition co-auteurs), qui ne peut de
+    # toute façon pas être déduit de la seule comptabilité.
     # ──────────────────────────────────────────────
     if "royalties_referentiel" not in st.session_state:
         st.session_state["royalties_referentiel"] = []
 
-    onglet1, onglet2, onglet3, onglet4 = st.tabs([
-        "📋 Référentiel contrats",
-        "🧮 Calcul des droits",
-        "🏛️ URSSAF / Précompte",
+    onglet1, onglet2, onglet3, onglet4, onglet5 = st.tabs([
+        "📋 Référentiel",
+        "🧮 Simulateur",
+        "🏛️ Simulateur URSSAF",
+        "📒 Réel (comptabilisé)",
         "📄 Relevés par auteur"
     ])
 
     # ══════════════════════════════════════════════
-    # ONGLET 1 — RÉFÉRENTIEL CONTRATS
+    # ONGLET 1 — RÉFÉRENTIEL
     # ══════════════════════════════════════════════
     with onglet1:
+        mapping_auto_preview = resoudre_mapping_auteurs(st.session_state.get("df_pivot")) if "df_pivot" in st.session_state else {}
+        if mapping_auto_preview:
+            st.success(f"✅ {len(mapping_auto_preview)} correspondance(s) ISBN → auteur détectée(s) "
+                       f"automatiquement depuis une famille analytique AUTEUR de votre export — pas besoin "
+                       f"de les ressaisir ci-dessous pour l'onglet **📒 Réel (comptabilisé)**.")
+            st.dataframe(
+                pd.DataFrame([{"ISBN": k, "Auteur (détecté)": v} for k, v in mapping_auto_preview.items()]),
+                use_container_width=True
+            )
+            st.caption("Le référentiel ci-dessous reste utile pour le **🧮 Simulateur** (taux, paliers, "
+                       "répartition co-auteurs), qui ne peut pas être déduit de la comptabilité seule.")
+        else:
+            st.info("💡 Si votre logiciel comptable permet de tagger une famille analytique supplémentaire "
+                    "nommée **AUTEUR** (en plus d'EDITION/COMMUNICATION/Types de dépenses) — mappable dans "
+                    "⚙️ Paramétrage analytique — la correspondance ISBN → auteur sera détectée automatiquement "
+                    "ici. En l'absence de cette famille, complétez le référentiel manuel ci-dessous.")
+
         st.subheader("Saisie des contrats auteurs")
 
         st.markdown("**Ajouter un contrat**")
@@ -1322,10 +1380,13 @@ elif page == "✍️ Droits d'auteurs":
             st.info("Aucun contrat enregistré. Commencez par en ajouter un ci-dessus.")
 
     # ══════════════════════════════════════════════
-    # ONGLET 2 — CALCUL DES DROITS
+    # ONGLET 2 — SIMULATEUR (ESTIMATION PAR PALIERS)
     # ══════════════════════════════════════════════
     with onglet2:
-        st.subheader("Calcul des droits d'auteurs par titre")
+        st.subheader("Simulateur — estimation par paliers")
+        st.caption("⚠️ Ceci est une estimation indicative (taux/paliers saisis dans le référentiel), "
+                   "utile avant la provision de clôture. Les montants réellement dus sont dans l'onglet "
+                   "**📒 Réel (comptabilisé)**.")
 
         if "df_pivot" not in st.session_state:
             st.warning("⚠️ Générer d'abord le SOCLE EDITION.")
@@ -1432,10 +1493,12 @@ elif page == "✍️ Droits d'auteurs":
                 st.plotly_chart(fig_droits, use_container_width=True)
 
     # ══════════════════════════════════════════════
-    # ONGLET 3 — URSSAF / PRÉCOMPTE
+    # ONGLET 3 — SIMULATEUR URSSAF
     # ══════════════════════════════════════════════
     with onglet3:
-        st.subheader("Calcul URSSAF — Précompte diffuseur")
+        st.subheader("Simulateur URSSAF — Précompte diffuseur")
+        st.caption("⚠️ Estimation basée sur le simulateur de l'onglet précédent — à comparer avec les montants "
+                   "réellement provisionnés dans l'onglet **📒 Réel (comptabilisé)**.")
 
         st.markdown("""
         En tant qu'éditeur/diffuseur, vous êtes **précompteur** : vous prélevez les cotisations
@@ -1518,16 +1581,196 @@ elif page == "✍️ Droits d'auteurs":
             st.plotly_chart(fig_urssaf, use_container_width=True)
 
     # ══════════════════════════════════════════════
-    # ONGLET 4 — RELEVÉS PAR AUTEUR
+    # ONGLET 4 — RÉEL (COMPTABILISÉ)
     # ══════════════════════════════════════════════
     with onglet4:
+        st.subheader("Montants réellement comptabilisés — titre par titre, puis auteur par auteur")
+        st.caption("Ce module ne recalcule rien : il lit directement, pour chaque ISBN, les écritures déjà "
+                   "provisionnées dans votre grand livre analytique (droits bruts, contribution diffuseur, "
+                   "précompte URSSAF, net dû à l'auteur), pour ne jamais diverger de la comptabilité réelle.")
+
+        if "df_pivot" not in st.session_state:
+            st.warning("⚠️ Générer d'abord le SOCLE EDITION.")
+        else:
+            df_pivot_reel = st.session_state["df_pivot"].copy()
+            df_pivot_reel["Date"] = pd.to_datetime(df_pivot_reel["Date"], errors="coerce")
+
+            st.markdown("**Période de déclaration**")
+            dates_valides = df_pivot_reel["Date"].dropna()
+            date_min_defaut = dates_valides.min() if not dates_valides.empty else pd.Timestamp("2024-01-01")
+            date_max_defaut = dates_valides.max() if not dates_valides.empty else pd.Timestamp.today()
+            col_p1, col_p2 = st.columns(2)
+            periode_debut = col_p1.date_input("Du", value=date_min_defaut.date(), key="reel_periode_debut")
+            periode_fin   = col_p2.date_input("Au", value=date_max_defaut.date(), key="reel_periode_fin")
+            st.caption("Les montants ci-dessous ne portent que sur les écritures dont la date est comprise "
+                       "dans cette période (ex. un trimestre ou un mois de déclaration URSSAF).")
+
+            mask_periode = (
+                (df_pivot_reel["Date"] >= pd.to_datetime(periode_debut))
+                & (df_pivot_reel["Date"] <= pd.to_datetime(periode_fin))
+            )
+            df_pivot_reel = df_pivot_reel[mask_periode]
+
+            st.markdown("**Comptes à lire dans le grand livre** _(réutilisables d'un exercice à l'autre)_")
+            col_c1, col_c2, col_c3, col_c4 = st.columns(4)
+            compte_droits_bruts = col_c1.text_input("Droits bruts (charge)", value="604300000", key="cpt_droits_bruts")
+            compte_diffuseur    = col_c2.text_input("Contribution diffuseur", value="645106", key="cpt_diffuseur")
+            compte_urssaf       = col_c3.text_input("URSSAF à payer", value="438106", key="cpt_urssaf")
+            compte_net_du       = col_c4.text_input("Droits d'auteurs à payer (net)", value="408106", key="cpt_net_du")
+            st.caption("⚠️ Le compte de droits bruts peut aussi contenir d'autres prestations (achats non liés "
+                       "aux droits d'auteurs) selon votre plan de comptes — vérifiez le détail en cas d'écart "
+                       "inattendu avec vos attentes.")
+
+            def _par_isbn(compte, col):
+                m = df_pivot_reel["Compte"].astype(str).str.strip() == str(compte).strip()
+                if not m.any():
+                    return pd.Series(dtype=float)
+                return df_pivot_reel[m].groupby("Code_Analytique")[col].sum()
+
+            droits_bruts_s = _par_isbn(compte_droits_bruts, "Débit")
+            diffuseur_s    = _par_isbn(compte_diffuseur, "Débit")
+            urssaf_s       = _par_isbn(compte_urssaf, "Crédit")
+            net_du_s       = _par_isbn(compte_net_du, "Crédit")
+
+            isbns_reels = sorted(set(droits_bruts_s.index) | set(diffuseur_s.index)
+                                | set(urssaf_s.index) | set(net_du_s.index))
+            isbns_reels = [i for i in isbns_reels
+                           if str(i).strip() not in ("", "CHARGES INDIRECTES", "PRODUITS INDIRECTS")]
+
+            if not isbns_reels:
+                st.info("Aucun montant trouvé sur ces comptes pour l'instant. Vérifiez les numéros de comptes "
+                        "ci-dessus, ou provisionnez d'abord les droits d'auteurs dans votre grand livre.")
+            else:
+                mapping_auto = resoudre_mapping_auteurs(df_pivot_reel)
+                referentiel_par_isbn = {}
+                for c in st.session_state["royalties_referentiel"]:
+                    referentiel_par_isbn.setdefault(c["isbn"], []).append((c["auteur"], c["part"], c["titre"]))
+
+                source_mapping = ("détection automatique (famille analytique AUTEUR)" if mapping_auto
+                                   else "référentiel manuel (onglet Référentiel)")
+                st.caption(f"Correspondance ISBN → auteur utilisée : {source_mapping}.")
+
+                lignes, isbn_sans_auteur = [], []
+                for isbn in isbns_reels:
+                    droits_bruts = float(droits_bruts_s.get(isbn, 0))
+                    diffuseur    = float(diffuseur_s.get(isbn, 0))
+                    urssaf_total = float(urssaf_s.get(isbn, 0))
+                    net_du       = float(net_du_s.get(isbn, 0))
+
+                    if isbn in referentiel_par_isbn:
+                        parts = referentiel_par_isbn[isbn]
+                    elif isbn in mapping_auto:
+                        parts = [(mapping_auto[isbn], 100.0, isbn)]
+                    else:
+                        parts = [("(auteur non identifié)", 100.0, isbn)]
+                        isbn_sans_auteur.append(isbn)
+
+                    for auteur, part, titre in parts:
+                        coeff = part / 100.0
+                        lignes.append({
+                            "ISBN": isbn,
+                            "Titre": titre if titre and titre != isbn else isbn,
+                            "Auteur": auteur,
+                            "Part (%)": part,
+                            "Droits bruts (€)": round(droits_bruts * coeff, 2),
+                            "Contribution diffuseur (€)": round(diffuseur * coeff, 2),
+                            "URSSAF precompte+diffuseur (€)": round(urssaf_total * coeff, 2),
+                            "Net du a l'auteur (€)": round(net_du * coeff, 2),
+                        })
+
+                df_reel = pd.DataFrame(lignes)
+                st.session_state["df_royalties_reel"] = df_reel
+
+                if isbn_sans_auteur:
+                    st.warning(f"⚠️ {len(isbn_sans_auteur)} ISBN avec des droits comptabilisés mais sans auteur "
+                               f"identifié : {', '.join(isbn_sans_auteur)}. Ajoutez-les dans l'onglet "
+                               f"Référentiel pour qu'ils apparaissent nommément dans les relevés.")
+
+                cols_montant = ["Droits bruts (€)", "Contribution diffuseur (€)",
+                                "URSSAF precompte+diffuseur (€)", "Net du a l'auteur (€)"]
+                st.dataframe(
+                    df_reel.style.format({c: "{:,.2f}" for c in cols_montant}),
+                    use_container_width=True
+                )
+
+                total_droits_bruts = df_reel["Droits bruts (€)"].sum()
+                total_urssaf       = df_reel["URSSAF precompte+diffuseur (€)"].sum()
+                total_net_du       = df_reel["Net du a l'auteur (€)"].sum()
+                col_m1, col_m2, col_m3 = st.columns(3)
+                col_m1.metric("Droits bruts comptabilisés", f"{total_droits_bruts:,.2f} €")
+                col_m2.metric("URSSAF (précompte + diffuseur)", f"{total_urssaf:,.2f} €")
+                col_m3.metric("Net dû aux auteurs", f"{total_net_du:,.2f} €")
+
+                df_par_auteur_reel = df_reel.groupby("Auteur", as_index=False)[cols_montant].sum()
+                fig_reel = px.bar(
+                    df_par_auteur_reel.sort_values("Net du a l'auteur (€)", ascending=False),
+                    x="Auteur", y="Net du a l'auteur (€)", text_auto=".0f",
+                    title="Net dû par auteur (comptabilisé)"
+                )
+                fig_reel.update_traces(textposition="outside")
+                st.plotly_chart(fig_reel, use_container_width=True)
+
+                # ================================================
+                # RÉCAPITULATIF — droits dus par auteur + déclaration URSSAF de la période
+                # ================================================
+                st.divider()
+                st.subheader(f"📋 Récapitulatif de la période du {periode_debut.strftime('%d/%m/%Y')} "
+                             f"au {periode_fin.strftime('%d/%m/%Y')}")
+
+                st.markdown("**Droits dus par auteur** _(net après précompte, tel que comptabilisé)_")
+                st.dataframe(
+                    df_par_auteur_reel.sort_values("Net du a l'auteur (€)", ascending=False)
+                                      .style.format({c: "{:,.2f}" for c in cols_montant}),
+                    use_container_width=True
+                )
+
+                st.markdown(f"""
+                <div style='padding:14px 18px; border-radius:12px; background:#eef2ff;
+                            margin-top:8px; margin-bottom:8px'>
+                    <div style='font-weight:600; font-size:15px; margin-bottom:6px'>
+                        🏛️ Déclaration URSSAF à effectuer sur cette période
+                    </div>
+                    <div>Précompte + contribution diffuseur à reverser : <b>{total_urssaf:,.2f} €</b></div>
+                    <div>Assis sur des droits bruts comptabilisés de : <b>{total_droits_bruts:,.2f} €</b></div>
+                </div>
+                """, unsafe_allow_html=True)
+
+                buffer_reel = BytesIO()
+                with pd.ExcelWriter(buffer_reel, engine="openpyxl") as writer:
+                    df_reel.to_excel(writer, index=False, sheet_name="Detail_par_titre")
+                    df_par_auteur_reel.to_excel(writer, index=False, sheet_name="Recap_par_auteur")
+                    pd.DataFrame([{
+                        "Période début": periode_debut, "Période fin": periode_fin,
+                        "Droits bruts (€)": total_droits_bruts,
+                        "URSSAF precompte+diffuseur à déclarer (€)": total_urssaf,
+                        "Net dû aux auteurs (€)": total_net_du,
+                    }]).to_excel(writer, index=False, sheet_name="Declaration_URSSAF")
+                buffer_reel.seek(0)
+                st.download_button(
+                    "📥 Exporter le récapitulatif de la période (Excel)",
+                    buffer_reel,
+                    file_name=f"Droits_auteurs_{periode_debut}_{periode_fin}.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key="export_reel_periode"
+                )
+
+    # ══════════════════════════════════════════════
+    # ONGLET 5 — RELEVÉS PAR AUTEUR
+    # ══════════════════════════════════════════════
+    with onglet5:
         st.subheader("Relevés de droits par auteur")
 
-        source_df_key = "df_royalties_urssaf" if "df_royalties_urssaf" in st.session_state \
-                        else "df_royalties_resultats"
+        if "df_royalties_reel" in st.session_state and not st.session_state["df_royalties_reel"].empty:
+            source_df_key = "df_royalties_reel"
+            st.caption("✅ Source : montants réellement comptabilisés (onglet 📒 Réel).")
+        elif "df_royalties_urssaf" in st.session_state:
+            source_df_key = "df_royalties_urssaf"
+            st.caption("ℹ️ Source : simulateur (estimation), aucun montant réel comptabilisé trouvé pour l'instant.")
+        else:
+            source_df_key = "df_royalties_resultats"
 
         if source_df_key not in st.session_state:
-            st.warning("⚠️ Effectuez d'abord le calcul des droits (onglet 'Calcul des droits').")
+            st.warning("⚠️ Effectuez d'abord le calcul dans l'onglet 'Simulateur' ou 'Réel (comptabilisé)'.")
         else:
             df_releves = st.session_state[source_df_key].copy()
             auteurs    = sorted(df_releves["Auteur"].unique().tolist())
@@ -1539,11 +1782,12 @@ elif page == "✍️ Droits d'auteurs":
             else:
                 df_auteur = df_releves
 
-            # Colonnes à afficher selon ce qui est disponible
+            # Colonnes à afficher selon la source active (simulateur, simulateur+URSSAF, ou réel comptabilisé)
             cols_releve_base = [
-                "Auteur", "Titre", "ISBN",
+                "Auteur", "Titre", "ISBN", "Part (%)",
                 "CA brut (€)", "Retours (€)", "Remises (€)",
-                "Base calcul (€)", "Droits bruts (€)"
+                "Base calcul (€)", "Droits bruts (€)",
+                "Contribution diffuseur (€)", "URSSAF precompte+diffuseur (€)", "Net du a l'auteur (€)"
             ]
             cols_releve_urssaf = [
                 "CSG + CRDS (€)", "Formation pro (€)",
