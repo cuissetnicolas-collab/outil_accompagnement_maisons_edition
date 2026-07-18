@@ -130,6 +130,125 @@ def filtrer_isbn_reels(df):
         mask = mask & (df["Famille_Analytique"].astype(str).str.upper() == "EDITION")
     return df[mask]
 
+def _dialog_decorator(title, width="large"):
+    """Retourne le décorateur st.dialog si disponible (Streamlit ≥ 1.31), sinon un
+    expander déplié en repli pour rester compatible avec une version plus ancienne."""
+    if hasattr(st, "dialog"):
+        return st.dialog(title, width=width)
+    def _wrap(func):
+        def _inner(*args, **kwargs):
+            with st.expander(f"🪟 {title}", expanded=True):
+                return func(*args, **kwargs)
+        return _inner
+    return _wrap
+
+@_dialog_decorator("📖 Fiche titre", width="large")
+def afficher_fiche_titre(isbn_sel, df, params):
+    """Fiche détaillée d'un titre (mini SIG) affichée dans une fenêtre modale dédiée."""
+    df_t = df[df["Code_Analytique"] == isbn_sel]
+    df_v   = df_t[df_t["Compte"].astype(str).str.startswith(tuple(params["ventes"]))]
+    df_r   = df_t[df_t["Compte"].astype(str).str.startswith(tuple(params["retours"]))]
+    df_rem = df_t[df_t["Compte"].astype(str).str.startswith(tuple(params["remises"]))]
+    df_c   = df_t[df_t["Compte"].astype(str).str.startswith(tuple(params["charges"]))]
+
+    ventes_ht   = df_v["Crédit"].sum()
+    retours_m   = df_r["Débit"].sum()
+    remises_m   = df_rem["Débit"].sum()
+    ca_net      = ventes_ht - retours_m - remises_m
+    charges_v   = df_c["Débit"].sum()
+    marge_brute = ca_net - charges_v
+    taux_ret    = (retours_m / ventes_ht * 100) if ventes_ht else 0
+    taux_rem    = (remises_m / ventes_ht * 100) if ventes_ht else 0
+
+    if marge_brute > 0 and taux_ret < 20:
+        signal, bg, fg = "🟢 Titre rentable", "#d1fae5", "#065f46"
+    elif marge_brute > 0 and taux_ret < 35:
+        signal, bg, fg = "🟡 Rentabilité à surveiller", "#fef3c7", "#92400e"
+    else:
+        signal, bg, fg = "🔴 Titre en difficulté", "#fee2e2", "#991b1b"
+
+    st.markdown(f"""
+    <div style='padding:14px 18px; border-radius:12px; background:{bg}; color:{fg};
+                font-weight:600; font-size:16px; margin-bottom:14px'>
+        {isbn_sel} — {signal}
+    </div>
+    """, unsafe_allow_html=True)
+
+    k1, k2, k3 = st.columns(3)
+    k1.metric("Taux de retour", f"{taux_ret:.1f} %")
+    k2.metric("Taux de remise", f"{taux_rem:.1f} %")
+    k3.metric("Marge brute", f"{marge_brute:,.0f} €")
+
+    st.markdown("#### Mini SIG — Soldes intermédiaires de gestion")
+    rows_sig = [
+        ("Ventes HT",           ventes_ht,   "base"),
+        ("− Retours",           -retours_m,  "deduction"),
+        ("− Remises",           -remises_m,  "deduction"),
+        ("= CA net",            ca_net,      "subtotal"),
+        ("− Charges variables", -charges_v,  "deduction"),
+        ("= Marge brute",       marge_brute, "total"),
+    ]
+    html_rows = ""
+    for libelle, montant, style in rows_sig:
+        if style == "subtotal":
+            row_style = "background:#eef2ff; font-weight:600;"
+        elif style == "total":
+            color = "#065f46" if montant >= 0 else "#991b1b"
+            fill = "#d1fae5" if montant >= 0 else "#fee2e2"
+            row_style = f"background:{fill}; font-weight:700; color:{color};"
+        elif style == "deduction":
+            row_style = "color:#b91c1c;"
+        else:
+            row_style = "font-weight:500;"
+        html_rows += (f"<tr style='{row_style}'>"
+                      f"<td style='padding:7px 12px; border-bottom:1px solid #eee'>{libelle}</td>"
+                      f"<td style='padding:7px 12px; border-bottom:1px solid #eee; text-align:right'>{montant:,.0f} €</td>"
+                      f"</tr>")
+    st.markdown(f"""
+    <table style='width:100%; border-collapse:collapse; font-size:14px; border-radius:8px; overflow:hidden'>
+        {html_rows}
+    </table>
+    """, unsafe_allow_html=True)
+
+    fig_sig = go.Figure(go.Waterfall(
+        orientation="v",
+        measure=["absolute", "relative", "relative", "total", "relative", "total"],
+        x=[r[0] for r in rows_sig], y=[r[1] for r in rows_sig],
+        connector={"line": {"color": "gray", "width": 0.5}},
+        decreasing={"marker": {"color": "#EF4444"}},
+        increasing={"marker": {"color": "#10B981"}},
+        totals={"marker": {"color": "#3B82F6"}}
+    ))
+    fig_sig.update_layout(height=300, margin=dict(t=10), yaxis_title="€")
+    st.plotly_chart(fig_sig, use_container_width=True)
+
+    df_t_evol = df_t.copy()
+    df_t_evol["Mois"] = pd.to_datetime(df_t_evol["Date"], errors="coerce").dt.to_period("M").astype(str)
+    evol_v = df_t_evol[df_t_evol["Compte"].astype(str).str.startswith(tuple(params["ventes"]))].groupby("Mois")["Crédit"].sum().reset_index()
+    evol_r = df_t_evol[df_t_evol["Compte"].astype(str).str.startswith(tuple(params["retours"]))].groupby("Mois")["Débit"].sum().reset_index()
+    evol = evol_v.merge(evol_r, on="Mois", how="left").fillna(0)
+    evol.columns = ["Mois", "Ventes", "Retours"]
+    if not evol.empty:
+        st.markdown("#### Évolution mensuelle")
+        fig = px.line(evol, x="Mois", y=["Ventes", "Retours"], markers=True, height=260)
+        fig.update_layout(margin=dict(t=10), legend_title="")
+        st.plotly_chart(fig, use_container_width=True)
+
+    cr_data = {
+        "Poste": ["Ventes HT", "— Retours", "— Remises", "= CA net", "— Charges variables", "= Marge brute"],
+        "Montant (€)": [ventes_ht, -retours_m, -remises_m, ca_net, -charges_v, marge_brute]
+    }
+    df_cr = pd.DataFrame(cr_data)
+    buffer = BytesIO()
+    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
+        df_cr.to_excel(writer, index=False, sheet_name="Compte_Resultat")
+        evol.to_excel(writer, index=False, sheet_name="Evolution_mensuelle")
+    buffer.seek(0)
+    st.download_button("📥 Exporter la fiche titre (Excel)", buffer,
+                        file_name=f"Fiche_titre_{isbn_sel.replace('/', '-')}.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        key=f"export_fiche_{isbn_sel}")
+
 def build_data_summary():
     """Construit un résumé textuel du pivot pour l'envoyer à Claude."""
     if "df_pivot" not in st.session_state:
@@ -840,67 +959,16 @@ elif page == "📖 Analyse par titre":
         st.warning("Aucun ISBN/code analytique détecté dans les données.")
         st.stop()
 
-    isbn_sel = st.selectbox("Sélectionnez un titre (ISBN)", titres)
-    df_t = df[df["Code_Analytique"] == isbn_sel]
-    df_v   = df_t[df_t["Compte"].astype(str).str.startswith(tuple(params["ventes"]))]
-    df_r   = df_t[df_t["Compte"].astype(str).str.startswith(tuple(params["retours"]))]
-    df_rem = df_t[df_t["Compte"].astype(str).str.startswith(tuple(params["remises"]))]
-    df_c   = df_t[df_t["Compte"].astype(str).str.startswith(tuple(params["charges"]))]
+    st.markdown("Sélectionnez un titre puis ouvrez sa fiche détaillée — elle s'affiche dans une "
+                "fenêtre dédiée avec un mini SIG (soldes intermédiaires de gestion) et son évolution mensuelle.")
+    col_sel, col_btn = st.columns([3, 1])
+    with col_sel:
+        isbn_sel = st.selectbox("Titre (ISBN)", titres, label_visibility="collapsed")
+    with col_btn:
+        ouvrir = st.button("📖 Ouvrir la fiche", type="primary", use_container_width=True)
 
-    ventes_ht   = df_v["Crédit"].sum()
-    retours_m   = df_r["Débit"].sum()
-    remises_m   = df_rem["Débit"].sum()
-    ca_net      = ventes_ht - retours_m - remises_m
-    charges_v   = df_c["Débit"].sum()
-    marge_brute = ca_net - charges_v
-    taux_ret    = (retours_m / ventes_ht * 100) if ventes_ht else 0
-
-    # Feu tricolore
-    if marge_brute > 0 and taux_ret < 20:
-        signal, couleur = "🟢 Titre rentable", "green"
-    elif marge_brute > 0 and taux_ret < 35:
-        signal, couleur = "🟡 Rentabilité à surveiller", "orange"
-    else:
-        signal, couleur = "🔴 Titre en difficulté", "red"
-    st.markdown(f"### {signal}")
-    st.divider()
-
-    col1, col2 = st.columns(2)
-    with col1:
-        st.subheader("Compte de résultat simplifié")
-        cr_data = {
-            "Poste": ["Ventes HT", "— Retours", "— Remises", "= CA net", "— Charges variables", "= Marge brute"],
-            "Montant (€)": [ventes_ht, -retours_m, -remises_m, ca_net, -charges_v, marge_brute]
-        }
-        df_cr = pd.DataFrame(cr_data)
-        st.dataframe(df_cr.style.format({"Montant (€)": "{:,.0f}"}), hide_index=True)
-    with col2:
-        st.subheader("Indicateurs")
-        st.metric("Taux de retour", f"{taux_ret:.1f} %")
-        st.metric("Taux de remise", f"{(remises_m/ventes_ht*100) if ventes_ht else 0:.1f} %")
-        st.metric("Marge brute", f"{marge_brute:,.0f} €")
-
-    # Évolution mensuelle du titre
-    df_t["Mois"] = pd.to_datetime(df_t["Date"], errors="coerce").dt.to_period("M").astype(str)
-    evol_v = df_t[df_t["Compte"].astype(str).str.startswith(tuple(params["ventes"]))].groupby("Mois")["Crédit"].sum().reset_index()
-    evol_r = df_t[df_t["Compte"].astype(str).str.startswith(tuple(params["retours"]))].groupby("Mois")["Débit"].sum().reset_index()
-    evol = evol_v.merge(evol_r, on="Mois", how="left").fillna(0)
-    evol.columns = ["Mois", "Ventes", "Retours"]
-    if not evol.empty:
-        st.subheader("Évolution mensuelle")
-        fig = px.line(evol, x="Mois", y=["Ventes", "Retours"], markers=True, height=300)
-        fig.update_layout(margin=dict(t=20), legend_title="")
-        st.plotly_chart(fig, use_container_width=True)
-
-    # Export
-    buffer = BytesIO()
-    with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
-        df_cr.to_excel(writer, index=False, sheet_name="Compte_Resultat")
-        evol.to_excel(writer, index=False, sheet_name="Evolution_mensuelle")
-    buffer.seek(0)
-    st.download_button("📥 Exporter la fiche titre (Excel)", buffer,
-                        file_name=f"Fiche_titre_{isbn_sel.replace('/', '-')}.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+    if ouvrir:
+        afficher_fiche_titre(isbn_sel, df, params)
 
 # =====================
 # TRÉSORERIE PRÉVISIONNELLE
