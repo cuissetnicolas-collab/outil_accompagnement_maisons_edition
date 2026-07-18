@@ -499,8 +499,21 @@ elif page == "VISION EDITION":
         df = st.session_state["df_pivot"].copy()
         if st.session_state.get("repartition_active"):
             st.caption("ℹ️ Les charges/produits indirects ont été répartis sur les titres actifs.")
-        df["Résultat"] = df["Crédit"] - df["Débit"]
-        top_isbn = df.groupby("Code_Analytique", as_index=False)["Résultat"].sum().sort_values("Résultat", ascending=False).head(10)
+
+        # On ne garde que les lignes réellement affectées à un titre EDITION (un vrai ISBN).
+        # Sans ce filtre, les lignes hors comptes de charges/produits (tiers, banque, TVA...)
+        # qui n'ont jamais reçu de code EDITION remontent avec un Code_Analytique vide, et leur
+        # somme cumulée (souvent élevée) polluait le classement "Top 10 ISBN".
+        label_ci = st.session_state.get("labels_indirect", {}).get("charges", "CHARGES INDIRECTES")
+        label_pi = st.session_state.get("labels_indirect", {}).get("produits", "PRODUITS INDIRECTS")
+        labels_exclus = {label_ci.upper(), label_pi.upper(), ""}
+        df_isbn = df[
+            (df["Famille_Analytique"].astype(str).str.upper() == "EDITION")
+            & (~df["Code_Analytique"].astype(str).str.upper().isin(labels_exclus))
+        ].copy()
+
+        df_isbn["Résultat"] = df_isbn["Crédit"] - df_isbn["Débit"]
+        top_isbn = df_isbn.groupby("Code_Analytique", as_index=False)["Résultat"].sum().sort_values("Résultat", ascending=False).head(10)
         st.dataframe(top_isbn)
         fig = px.bar(top_isbn, x="Code_Analytique", y="Résultat", title="Top 10 ISBN par résultat net", labels={"Code_Analytique":"ISBN","Résultat":"Résultat net"})
         st.plotly_chart(fig, use_container_width=True)
@@ -516,6 +529,18 @@ elif page == "ISBN VIEW":
         df = st.session_state["df_pivot"].copy()
         if st.session_state.get("repartition_active"):
             st.caption("ℹ️ Les charges/produits indirects ont été répartis sur les titres actifs.")
+
+        # Même filtre que VISION EDITION : ne garder que les vraies lignes ISBN (famille EDITION,
+        # hors code vide et hors libellés indirects globaux), sinon les lignes hors charges/produits
+        # (tiers, banque, TVA...) apparaissent comme une fausse "ligne ISBN" vide.
+        label_ci = st.session_state.get("labels_indirect", {}).get("charges", "CHARGES INDIRECTES")
+        label_pi = st.session_state.get("labels_indirect", {}).get("produits", "PRODUITS INDIRECTS")
+        labels_exclus = {label_ci.upper(), label_pi.upper(), ""}
+        df = df[
+            (df["Famille_Analytique"].astype(str).str.upper() == "EDITION")
+            & (~df["Code_Analytique"].astype(str).str.upper().isin(labels_exclus))
+        ].copy()
+
         df_cr = df.groupby("Code_Analytique", as_index=False).agg({"Débit":"sum","Crédit":"sum"})
         df_cr["Résultat"] = df_cr["Crédit"] - df_cr["Débit"]
         st.dataframe(df_cr)
