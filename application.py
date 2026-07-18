@@ -304,11 +304,26 @@ elif page == "📂 Import des données":
                 st.session_state["df_comptables"] = df
                 st.success(f"✅ Fichier chargé — {df.shape[0]} lignes, {df.shape[1]} colonnes")
                 st.write("**Colonnes détectées :**", list(df.columns))
-                # Validation rapide
-                missing = df.isnull().sum()
-                missing = missing[missing > 0]
-                if not missing.empty:
-                    st.warning(f"⚠️ Valeurs manquantes détectées : {missing.to_dict()}")
+                # Validation rapide — on ne signale que les colonnes structurelles évidentes
+                # (numéro de compte, débit, crédit, date). Les colonnes analytiques par famille
+                # (Famille/Catégorie/Code analytique : EDITION, COMMUNICATION, Types de dépenses...)
+                # sont normalement vides sur la majorité des lignes : chaque écriture n'appartient
+                # qu'à UNE seule famille à la fois, donc les colonnes des 2 autres familles sont
+                # vides pour cette ligne. Les remonter ici comme "valeurs manquantes" est un faux
+                # positif systématique — le vrai contrôle de cohérence analytique se fait plus loin,
+                # dans ⚙️ Paramétrage analytique, où le mapping multi-familles est connu.
+                colonnes_structurelles = [c for c in df.columns if any(
+                    mot in c.lower() for mot in ["compte", "débit", "debit", "crédit", "credit", "date"]
+                ) and "analytique" not in c.lower() and "catégorie" not in c.lower() and "categorie" not in c.lower()]
+                if colonnes_structurelles:
+                    missing = df[colonnes_structurelles].isnull().sum()
+                    missing = missing[missing > 0]
+                    if not missing.empty:
+                        st.warning(f"⚠️ Valeurs manquantes sur des colonnes structurelles : {missing.to_dict()}")
+                st.caption("ℹ️ Les colonnes analytiques par famille (EDITION, COMMUNICATION, Types de dépenses...) "
+                           "sont normalement vides sur une bonne partie des lignes — chaque écriture n'appartient "
+                           "qu'à une seule famille à la fois. Ce n'est pas signalé ici ; la cohérence analytique "
+                           "réelle est vérifiée dans **⚙️ Paramétrage analytique**.")
                 st.dataframe(df.head(10))
                 st.info("➡️ Passez maintenant dans **⚙️ Paramétrage analytique** pour configurer les colonnes.")
             except Exception as e:
