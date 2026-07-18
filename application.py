@@ -578,6 +578,12 @@ elif page == "⚙️ Paramétrage analytique":
         credit_col  = st.selectbox("Colonne Crédit", columns)
         date_col    = st.selectbox("Colonne Date", columns)
         libelle_col = st.selectbox("Libellé (optionnel)", [""] + columns)
+        journal_col = st.selectbox(
+            "Code journal (optionnel)", [""] + columns,
+            help="Recommandé pour le module Trésorerie : permet d'exclure les écritures de report "
+                 "à nouveau (reprise des soldes d'ouverture, souvent codées « AN ») des flux de "
+                 "trésorerie reconstitués, afin de ne pas les compter comme des mouvements de la période."
+        )
     with col2:
         st.subheader("Comptes comptables")
         ventes_comptes  = st.text_input("Comptes ventes", value="701")
@@ -646,6 +652,8 @@ elif page == "⚙️ Paramétrage analytique":
         mapping = {compte_col: "Compte", debit_col: "Débit", credit_col: "Crédit", date_col: "Date"}
         if libelle_col:
             mapping[libelle_col] = "Libellé"
+        if journal_col:
+            mapping[journal_col] = "Journal"
 
         # Chaque famille mappée génère une paire de colonnes Famille_Analytique[_i] / Code_Analytique[_i].
         # La famille n°1 (sans suffixe) reste la référence utilisée par les modules ISBN (EDITION).
@@ -663,7 +671,7 @@ elif page == "⚙️ Paramétrage analytique":
             noms_familles_actives.append(fam["nom"] or f"Famille {i+1}")
 
         df.rename(columns=mapping, inplace=True)
-        for col in familles_cols + codes_cols + ["Libellé"]:
+        for col in familles_cols + codes_cols + ["Libellé", "Journal"]:
             if col not in df.columns:
                 df[col] = ""
             else:
@@ -747,6 +755,8 @@ elif page == "⚙️ Paramétrage analytique":
         group_cols = ["Compte"] + familles_cols + codes_cols + ["Date"]
         if "Libellé" in df.columns:
             group_cols.append("Libellé")
+        if "Journal" in df.columns:
+            group_cols.append("Journal")
         pivot = df.groupby(group_cols, as_index=False).agg({"Débit": "sum", "Crédit": "sum"})
 
         st.session_state["df_pivot"] = pivot
@@ -1099,90 +1109,252 @@ elif page == "💰 Trésorerie prévisionnelle":
         st.warning("⚠️ Générez d'abord le socle analytique.")
         st.stop()
 
-    df_pivot = st.session_state["df_pivot"].copy()
-    df_pivot["Compte"] = df_pivot["Compte"].astype(str).str.strip()
-    df_pivot["Date"]   = pd.to_datetime(df_pivot["Date"], errors="coerce")
-    df_pivot["Débit"]  = pd.to_numeric(df_pivot["Débit"], errors="coerce").fillna(0)
-    df_pivot["Crédit"] = pd.to_numeric(df_pivot["Crédit"], errors="coerce").fillna(0)
+    st.caption(
+        "Tableau de flux de trésorerie (TFT) reconstitué à partir du grand livre — méthode directe, classement "
+        "par nature de compte (encaissements clients, paiements fournisseurs, dettes sociales/fiscales, "
+        "investissement, financement), sur le modèle du tableau de flux fourni. Les montants sont calculés à "
+        "partir des dates d'enregistrement comptable et peuvent différer légèrement d'un relevé bancaire réel "
+        "en cas de décalage d'encaissement/décaissement."
+    )
+
+    df_tr = st.session_state["df_pivot"].copy()
+    df_tr["Compte"] = df_tr["Compte"].astype(str).str.strip()
+    df_tr["Date"]   = pd.to_datetime(df_tr["Date"], errors="coerce")
+    df_tr["Débit"]  = pd.to_numeric(df_tr["Débit"], errors="coerce").fillna(0)
+    df_tr["Crédit"] = pd.to_numeric(df_tr["Crédit"], errors="coerce").fillna(0)
+    if "Journal" in df_tr.columns:
+        df_tr["Journal"] = df_tr["Journal"].astype(str).str.strip()
+    else:
+        df_tr["Journal"] = ""
+    df_tr = df_tr.dropna(subset=["Date"])
+    if df_tr.empty:
+        st.warning("Aucune écriture datée dans le socle analytique.")
+        st.stop()
+
+    # ---- Mapping par défaut des lignes du TFT (plan comptable général) ----
+    DEFAULT_MAPPING = [
+        ("Exploitation",   "Encaissements clients",                                  "411",             "credit"),
+        ("Exploitation",   "Paiements fournisseurs",                                 "401,408",         "debit_neg"),
+        ("Exploitation",   "Paiements dettes sociales - Salariés",                   "421,428",         "debit_neg"),
+        ("Exploitation",   "Paiements dettes sociales - Organismes",                 "431,437,438",     "debit_neg"),
+        ("Exploitation",   "Paiements dettes fiscales - TVA",                        "445510000",       "debit_neg"),
+        ("Exploitation",   "Paiements dettes fiscales - IS",                         "444",             "debit_neg"),
+        ("Exploitation",   "Encaissements aides et subventions d'exploitation",      "740",             "credit"),
+        ("Exploitation",   "Autres débiteurs et créditeurs",                         "419,446,448",     "net"),
+        ("Investissement", "Acquisitions d'immobilisations incorp. et corp.",        "201,205,215,218", "debit_neg"),
+        ("Investissement", "Acquisitions/Cessions d'immobilisations financières",    "271,275,277",     "net"),
+        ("Investissement", "Produits de cession des immobilisations",               "675,775",         "credit"),
+        ("Financement",    "Variation des comptes courants d'associés",             "455",             "net"),
+        ("Financement",    "Augmentation/(Diminution) du capital social",           "101",             "net"),
+        ("Financement",    "Subventions d'investissement",                          "13",              "net"),
+        ("Financement",    "Billets de trésorerie",                                 "4673,4674",       "net"),
+        ("Financement",    "Encaissement d'emprunt",                                "164,168",         "credit"),
+        ("Financement",    "Décaissement d'emprunt",                                "164,168",         "debit_neg"),
+    ]
+    SECTION_ORDER = ["Exploitation", "Investissement", "Financement"]
+
+    with st.expander("⚙️ Configuration des comptes du TFT (avancé)"):
+        st.caption("Préfixes de comptes (séparés par des virgules) utilisés pour classer chaque ligne du tableau. "
+                   "À adapter si votre plan comptable diffère. Note : les comptes 438/604300000 etc. liés aux "
+                   "droits d'auteurs sont également suivis dans le module « Droits d'auteurs ».")
+        mapping = []
+        for section, label, prefixes_def, mode in DEFAULT_MAPPING:
+            p = st.text_input(f"{section} — {label}", value=prefixes_def, key=f"tft_pfx_{label}")
+            mapping.append((section, label, [x.strip() for x in p.split(",") if x.strip()], mode))
+        comptes_banque = st.text_input("Comptes de trésorerie (banque/caisse)", value="512,530,580", key="tft_banque")
+        comptes_banque = tuple(x.strip() for x in comptes_banque.split(",") if x.strip())
+        journaux_exclus_txt = st.text_input(
+            "Journaux exclus des flux (report à nouveau)", value="AN", key="tft_journaux_exclus",
+            help="Les écritures de report à nouveau (reprise des soldes d'ouverture en début d'exercice, "
+                 "souvent codées « AN ») ne sont pas de vrais flux de la période : elles sont exclues du "
+                 "classement, mais utilisées pour suggérer la trésorerie à l'ouverture (solde bancaire repris)."
+        )
+        journaux_exclus = tuple(x.strip() for x in journaux_exclus_txt.split(",") if x.strip())
+
+    def montants_par_mois(sub_df, mode):
+        """Agrégation vectorisée par mois — gère proprement le cas d'un sous-ensemble vide."""
+        if sub_df.empty:
+            return {}
+        deb = sub_df.groupby("Mois")["Débit"].sum()
+        cre = sub_df.groupby("Mois")["Crédit"].sum()
+        if mode == "credit":
+            res = cre
+        elif mode == "debit_neg":
+            res = -deb
+        elif mode == "net":
+            res = cre.sub(deb, fill_value=0)
+        else:
+            res = cre * 0
+        return res.to_dict()
+
+    mask_an = df_tr["Journal"].isin(journaux_exclus) if journaux_exclus else pd.Series(False, index=df_tr.index)
+    df_tr_flux = df_tr[~mask_an].copy()
 
     col1, col2 = st.columns(2)
     with col1:
-        date_debut = st.date_input("Date de départ", pd.to_datetime("2024-01-01"))
-        horizon = st.slider("Horizon (mois)", 3, 36, 12)
+        date_debut = st.date_input("Date de départ (réalisé)", df_tr["Date"].min())
+        banque_an = df_tr[mask_an & df_tr["Compte"].str.startswith(comptes_banque)]
+        if not banque_an.empty:
+            solde_suggere = float(banque_an["Débit"].sum() - banque_an["Crédit"].sum())
+        else:
+            banque_avant = df_tr_flux[df_tr_flux["Compte"].str.startswith(comptes_banque) & (df_tr_flux["Date"] < pd.to_datetime(date_debut))]
+            solde_suggere = float(banque_avant["Débit"].sum() - banque_avant["Crédit"].sum())
+        tresorerie_ouverture = st.number_input(
+            "Trésorerie à l'ouverture (€)", value=solde_suggere, step=100.0,
+            help="Solde bancaire à la date de départ. Suggéré depuis les écritures de report à nouveau sur les "
+                 "comptes de trésorerie si elles existent, sinon depuis les écritures antérieures à cette date "
+                 "(0 si aucune des deux — à saisir manuellement dans ce cas)."
+        )
     with col2:
-        st.markdown("**Scénarios de projection**")
-        croissance_opt  = st.number_input("Croissance optimiste (%/mois)", value=4.0, step=0.5) / 100
-        croissance_cent = st.number_input("Croissance centrale (%/mois)", value=2.0, step=0.5) / 100
-        croissance_pess = st.number_input("Croissance pessimiste (%/mois)", value=0.0, step=0.5) / 100
-        evolution_charges = st.number_input("Évolution charges (%/mois)", value=1.0, step=0.5) / 100
+        horizon = st.slider("Horizon de projection (mois)", 0, 24, 6)
+        st.markdown("**Scénarios de projection (au-delà du réalisé)**")
+        croissance_opt  = st.number_input("Croissance encaissements — optimiste (%/mois)", value=4.0, step=0.5) / 100
+        croissance_cent = st.number_input("Croissance encaissements — central (%/mois)", value=2.0, step=0.5) / 100
+        croissance_pess = st.number_input("Croissance encaissements — pessimiste (%/mois)", value=0.0, step=0.5) / 100
+        evolution_charges = st.number_input("Évolution charges décaissées (%/mois)", value=1.0, step=0.5) / 100
 
-    comptes_bancaires = df_pivot[df_pivot["Compte"].str.startswith("5")]
-    solde_depart = (comptes_bancaires[comptes_bancaires["Date"] <= pd.to_datetime(date_debut)]["Crédit"].sum()
-                  - comptes_bancaires[comptes_bancaires["Date"] <= pd.to_datetime(date_debut)]["Débit"].sum())
-    st.info(f"Solde de départ (comptes '5') : **{solde_depart:,.2f} €**")
-
-    df_flux = df_pivot[~df_pivot["Compte"].str.startswith("5")].dropna(subset=["Date"])
-    df_flux = df_flux[df_flux["Date"] >= pd.to_datetime(date_debut)]
-    if df_flux.empty:
-        st.warning("Aucun flux détecté après la date de départ.")
+    df_period = df_tr_flux[df_tr_flux["Date"] >= pd.to_datetime(date_debut)].copy()
+    if df_period.empty:
+        st.warning("Aucune écriture après la date de départ.")
         st.stop()
+    df_period["Mois"] = df_period["Date"].dt.to_period("M")
+    mois_realises = sorted(df_period["Mois"].unique())
 
-    df_flux["Mois"] = df_flux["Date"].dt.to_period("M").astype(str)
-    flux_m = df_flux.groupby("Mois").agg({"Débit": "sum", "Crédit": "sum"}).reset_index()
-    flux_m["Solde_mensuel"] = flux_m["Crédit"] - flux_m["Débit"]
-    flux_m = flux_m.sort_values("Mois").reset_index(drop=True)
+    lignes = {}
+    for section, label, prefixes, mode in mapping:
+        if not prefixes:
+            continue
+        sub = df_period[df_period["Compte"].str.startswith(tuple(prefixes))]
+        lignes[(section, label)] = montants_par_mois(sub, mode)
 
-    dernier = pd.Period(flux_m["Mois"].max(), freq="M") if not flux_m.empty else pd.Period(date_debut, freq="M")
-    ca0 = flux_m["Crédit"].iloc[-1] if not flux_m.empty else 0
-    ch0 = flux_m["Débit"].iloc[-1] if not flux_m.empty else 0
+    table = pd.DataFrame(0.0, index=pd.MultiIndex.from_tuples(lignes.keys(), names=["Section", "Ligne"]), columns=mois_realises)
+    for key, vals in lignes.items():
+        for m, v in vals.items():
+            table.loc[key, m] = v
 
-    def build_scenario(taux_ca, taux_ch):
-        rows, ca, ch = [], ca0, ch0
-        for i in range(1, horizon + 1):
-            m = (dernier + i).strftime("%Y-%m")
-            ca *= (1 + taux_ca); ch *= (1 + taux_ch)
-            rows.append({"Mois": m, "Débit": ch, "Crédit": ca, "Solde_mensuel": ca - ch})
-        return pd.DataFrame(rows)
+    sous_totaux = table.groupby(level="Section", sort=False).sum()
+    flux_net_total = table.sum()
+    treso_real = tresorerie_ouverture + flux_net_total.cumsum()
 
-    prev_opt  = build_scenario(croissance_opt, evolution_charges)
-    prev_cent = build_scenario(croissance_cent, evolution_charges)
-    prev_pess = build_scenario(croissance_pess, evolution_charges)
+    _MOIS_FR = ["", "Janv.", "Févr.", "Mars", "Avr.", "Mai", "Juin", "Juil.", "Août", "Sept.", "Oct.", "Nov.", "Déc."]
+    def mois_label(p):
+        return f"{_MOIS_FR[p.month]} {p.year}"
 
-    def cumul(df_prev):
-        combined = pd.concat([flux_m, df_prev], ignore_index=True, sort=False)
-        combined["Trésorerie_cumulée"] = solde_depart + combined["Solde_mensuel"].cumsum()
-        return combined
+    # ---- Indicateurs ----
+    m1, m2, m3 = st.columns(3)
+    m1.metric("Trésorerie à l'ouverture", f"{tresorerie_ouverture:,.0f} €")
+    m2.metric("Trésorerie à la clôture (réalisé)", f"{treso_real.iloc[-1]:,.0f} €",
+              delta=f"{treso_real.iloc[-1] - tresorerie_ouverture:,.0f} €")
+    m3.metric("Flux net généré (période réalisée)", f"{flux_net_total.sum():,.0f} €")
 
-    df_opt  = cumul(prev_opt)
-    df_cent = cumul(prev_cent)
-    df_pess = cumul(prev_pess)
+    # ---- Tableau détaillé (réalisé) ----
+    display_rows, display_index = [], []
+    for section in SECTION_ORDER:
+        if section not in table.index.get_level_values("Section"):
+            continue
+        for key in table.index:
+            if key[0] == section:
+                display_rows.append(table.loc[key])
+                display_index.append(key[1])
+        display_rows.append(sous_totaux.loc[section])
+        display_index.append(f"▶ Flux net — {section}")
+    display_rows.append(treso_real)
+    display_index.append("● Trésorerie à la clôture (cumulée)")
 
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=df_opt["Mois"],  y=df_opt["Trésorerie_cumulée"],
-                              name="Optimiste", line=dict(color="#10B981", width=2, dash="dot")))
-    fig.add_trace(go.Scatter(x=df_cent["Mois"], y=df_cent["Trésorerie_cumulée"],
-                              name="Central",    line=dict(color="#3B82F6", width=2.5)))
-    fig.add_trace(go.Scatter(x=df_pess["Mois"], y=df_pess["Trésorerie_cumulée"],
-                              name="Pessimiste", line=dict(color="#EF4444", width=2, dash="dot")))
-    fig.add_hline(y=0, line_dash="dash", line_color="gray", annotation_text="Seuil zéro")
-    fig.update_layout(title="Évolution prévisionnelle de la trésorerie — 3 scénarios",
-                      xaxis_title="Mois", yaxis_title="Trésorerie cumulée (€)",
-                      legend=dict(orientation="h"), height=420)
-    st.plotly_chart(fig, use_container_width=True)
+    df_affiche = pd.DataFrame(display_rows, index=display_index)
+    df_affiche.columns = [mois_label(m) for m in df_affiche.columns]
 
-    # Alerte trésorerie négative
-    if df_cent["Trésorerie_cumulée"].min() < 0:
-        mois_neg = df_cent[df_cent["Trésorerie_cumulée"] < 0]["Mois"].iloc[0]
-        st.error(f"⚠️ Alerte : la trésorerie passe en négatif en **{mois_neg}** dans le scénario central !")
+    def style_lignes(row):
+        if row.name.startswith("▶") or row.name.startswith("●"):
+            return ["font-weight: bold; background-color: rgba(59,130,246,0.12)"] * len(row)
+        return [""] * len(row)
 
+    st.dataframe(df_affiche.style.apply(style_lignes, axis=1).format("{:,.0f} €"), use_container_width=True)
+
+    # ---- Projection (scénarios) ----
+    def base_ligne(key):
+        vals = table.loc[key]
+        return vals.iloc[-3:].mean() if len(vals) >= 3 else vals.mean()
+
+    def construire_projection(taux_encaissement, taux_charges):
+        futurs = [mois_realises[-1] + i for i in range(1, horizon + 1)]
+        proj = pd.DataFrame(0.0, index=table.index, columns=futurs)
+        for key in table.index:
+            section, label = key
+            if section == "Exploitation" and "encaissement" in label.lower():
+                taux = taux_encaissement
+            elif section == "Exploitation":
+                taux = taux_charges
+            else:
+                # Pas de nouvelle opération d'investissement/financement supposée par défaut
+                continue
+            v = base_ligne(key)
+            for m in futurs:
+                v *= (1 + taux)
+                proj.loc[key, m] = v
+        return proj
+
+    if horizon > 0:
+        scenarios = {
+            "Optimiste":  construire_projection(croissance_opt, evolution_charges),
+            "Central":    construire_projection(croissance_cent, evolution_charges),
+            "Pessimiste": construire_projection(croissance_pess, evolution_charges),
+        }
+        courbes = {}
+        for nom, proj in scenarios.items():
+            flux_proj = proj.sum()
+            treso_proj = treso_real.iloc[-1] + flux_proj.cumsum()
+            courbes[nom] = pd.concat([treso_real, treso_proj])
+
+        fig = go.Figure()
+        fig.add_trace(go.Scatter(x=[mois_label(m) for m in treso_real.index], y=treso_real.values,
+                                  name="Réalisé", line=dict(color="#111827", width=2.5)))
+        couleurs = {"Optimiste": "#10B981", "Central": "#3B82F6", "Pessimiste": "#EF4444"}
+        for nom, serie in courbes.items():
+            proj_part = serie.iloc[len(treso_real) - 1:]
+            fig.add_trace(go.Scatter(x=[mois_label(m) for m in proj_part.index], y=proj_part.values,
+                                      name=nom, line=dict(color=couleurs[nom], width=2, dash="dot")))
+        fig.add_hline(y=0, line_dash="dash", line_color="gray", annotation_text="Seuil zéro")
+        fig.update_layout(title="Trésorerie — réalisé et projection à 3 scénarios",
+                          xaxis_title="Mois", yaxis_title="Trésorerie cumulée (€)",
+                          legend=dict(orientation="h"), height=420)
+        st.plotly_chart(fig, use_container_width=True)
+
+        treso_cent_complete = courbes["Central"]
+        if treso_cent_complete.min() < 0:
+            mois_neg = treso_cent_complete[treso_cent_complete < 0].index[0]
+            st.error(f"⚠️ Alerte : la trésorerie passe en négatif en **{mois_label(mois_neg)}** dans le scénario central !")
+    else:
+        scenarios = {}
+        st.info("Augmentez l'horizon de projection pour visualiser les scénarios optimiste / central / pessimiste.")
+
+    # ---- Export Excel ----
     buffer = BytesIO()
     with pd.ExcelWriter(buffer, engine="openpyxl") as writer:
-        df_opt.to_excel(writer, index=False, sheet_name="Optimiste")
-        df_cent.to_excel(writer, index=False, sheet_name="Central")
-        df_pess.to_excel(writer, index=False, sheet_name="Pessimiste")
+        df_affiche.to_excel(writer, sheet_name="Réalisé")
+        for nom, proj in scenarios.items():
+            rows, idx = [], []
+            for section in SECTION_ORDER:
+                for key in proj.index:
+                    if key[0] == section:
+                        rows.append(proj.loc[key]); idx.append(key[1])
+                rows.append(proj[proj.index.get_level_values("Section") == section].sum()); idx.append(f"▶ Flux net — {section}")
+            flux_proj = proj.sum()
+            rows.append(tresorerie_ouverture + pd.concat([flux_net_total, flux_proj]).cumsum().iloc[len(flux_net_total):])
+            idx.append("● Trésorerie à la clôture (cumulée)")
+            df_export = pd.DataFrame(rows, index=idx)
+            df_export.columns = [mois_label(m) for m in df_export.columns]
+            df_export.to_excel(writer, sheet_name=f"Prévisionnel_{nom}"[:31])
+        wb = writer.book
+        for ws in wb.worksheets:
+            for row in ws.iter_rows():
+                label_cell = row[0]
+                if isinstance(label_cell.value, str) and (label_cell.value.startswith("▶") or label_cell.value.startswith("●")):
+                    for cell in row:
+                        cell.font = cell.font.copy(bold=True)
     buffer.seek(0)
-    st.download_button("📥 Exporter les prévisions (Excel)", buffer,
-                        file_name="Previsions_Tresorerie.xlsx",
+    st.download_button("📥 Exporter le tableau de flux de trésorerie (Excel)", buffer,
+                        file_name="Tableau_Flux_Tresorerie.xlsx",
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
 # =====================
