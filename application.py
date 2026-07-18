@@ -151,18 +151,25 @@ def afficher_fiche_titre(isbn_sel, df, params):
     df_rem = df_t[df_t["Compte"].astype(str).str.startswith(tuple(params["remises"]))]
     df_c   = df_t[df_t["Compte"].astype(str).str.startswith(tuple(params["charges"]))]
 
-    ventes_ht   = df_v["Crédit"].sum()
-    retours_m   = df_r["Débit"].sum()
-    remises_m   = df_rem["Débit"].sum()
-    ca_net      = ventes_ht - retours_m - remises_m
-    charges_v   = df_c["Débit"].sum()
-    marge_brute = ca_net - charges_v
-    taux_ret    = (retours_m / ventes_ht * 100) if ventes_ht else 0
-    taux_rem    = (remises_m / ventes_ht * 100) if ventes_ht else 0
+    # Charges fixes imputées = quote-part de la répartition des charges indirectes sur ce
+    # titre précis (compte "CHARGES INDIRECTES REPARTIES", généré si la répartition au nombre
+    # de titres actifs a été activée dans ⚙️ Paramétrage analytique). Vaut 0 sinon.
+    df_cfi = df_t[df_t["Compte"].astype(str) == "CHARGES INDIRECTES REPARTIES"]
 
-    if marge_brute > 0 and taux_ret < 20:
+    ventes_ht     = df_v["Crédit"].sum()
+    retours_m     = df_r["Débit"].sum()
+    remises_m     = df_rem["Débit"].sum()
+    ca_net        = ventes_ht - retours_m - remises_m
+    charges_v     = df_c["Débit"].sum()
+    marge_brute   = ca_net - charges_v
+    charges_fixes = df_cfi["Débit"].sum()
+    resultat_net  = marge_brute - charges_fixes
+    taux_ret      = (retours_m / ventes_ht * 100) if ventes_ht else 0
+    taux_rem      = (remises_m / ventes_ht * 100) if ventes_ht else 0
+
+    if resultat_net > 0 and taux_ret < 20:
         signal, bg, fg = "🟢 Titre rentable", "#d1fae5", "#065f46"
-    elif marge_brute > 0 and taux_ret < 35:
+    elif resultat_net > 0 and taux_ret < 35:
         signal, bg, fg = "🟡 Rentabilité à surveiller", "#fef3c7", "#92400e"
     else:
         signal, bg, fg = "🔴 Titre en difficulté", "#fee2e2", "#991b1b"
@@ -174,19 +181,25 @@ def afficher_fiche_titre(isbn_sel, df, params):
     </div>
     """, unsafe_allow_html=True)
 
-    k1, k2, k3 = st.columns(3)
+    k1, k2, k3, k4 = st.columns(4)
     k1.metric("Taux de retour", f"{taux_ret:.1f} %")
     k2.metric("Taux de remise", f"{taux_rem:.1f} %")
     k3.metric("Marge brute", f"{marge_brute:,.0f} €")
+    k4.metric("Résultat net (charges fixes incl.)", f"{resultat_net:,.0f} €")
+    if charges_fixes == 0 and not st.session_state.get("repartition_active"):
+        st.caption("ℹ️ Aucune charge fixe imputée : la répartition des charges indirectes sur les "
+                   "titres actifs n'a pas été activée dans ⚙️ Paramétrage analytique.")
 
     st.markdown("#### Mini SIG — Soldes intermédiaires de gestion")
     rows_sig = [
-        ("Ventes HT",           ventes_ht,   "base"),
-        ("− Retours",           -retours_m,  "deduction"),
-        ("− Remises",           -remises_m,  "deduction"),
-        ("= CA net",            ca_net,      "subtotal"),
-        ("− Charges variables", -charges_v,  "deduction"),
-        ("= Marge brute",       marge_brute, "total"),
+        ("Ventes HT",                  ventes_ht,      "base"),
+        ("− Retours",                  -retours_m,     "deduction"),
+        ("− Remises",                  -remises_m,     "deduction"),
+        ("= CA net",                   ca_net,         "subtotal"),
+        ("− Charges variables",        -charges_v,     "deduction"),
+        ("= Marge brute",              marge_brute,    "subtotal"),
+        ("− Charges fixes imputées",   -charges_fixes, "deduction"),
+        ("= Résultat net du titre",    resultat_net,   "total"),
     ]
     html_rows = ""
     for libelle, montant, style in rows_sig:
@@ -212,7 +225,7 @@ def afficher_fiche_titre(isbn_sel, df, params):
 
     fig_sig = go.Figure(go.Waterfall(
         orientation="v",
-        measure=["absolute", "relative", "relative", "total", "relative", "total"],
+        measure=["absolute", "relative", "relative", "total", "relative", "total", "relative", "total"],
         x=[r[0] for r in rows_sig], y=[r[1] for r in rows_sig],
         connector={"line": {"color": "gray", "width": 0.5}},
         decreasing={"marker": {"color": "#EF4444"}},
@@ -235,8 +248,8 @@ def afficher_fiche_titre(isbn_sel, df, params):
         st.plotly_chart(fig, use_container_width=True)
 
     cr_data = {
-        "Poste": ["Ventes HT", "— Retours", "— Remises", "= CA net", "— Charges variables", "= Marge brute"],
-        "Montant (€)": [ventes_ht, -retours_m, -remises_m, ca_net, -charges_v, marge_brute]
+        "Poste": [r[0] for r in rows_sig],
+        "Montant (€)": [r[1] for r in rows_sig]
     }
     df_cr = pd.DataFrame(cr_data)
     buffer = BytesIO()
@@ -248,6 +261,49 @@ def afficher_fiche_titre(isbn_sel, df, params):
                         file_name=f"Fiche_titre_{isbn_sel.replace('/', '-')}.xlsx",
                         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                         key=f"export_fiche_{isbn_sel}")
+
+def calculer_indicateurs_titres(df, params, titres):
+    """Calcule, pour chaque titre actif, CA brut/net, charges variables, charges fixes
+    imputées (quote-part de répartition des charges indirectes sur ce titre, si activée)
+    et résultat net — utilisé pour les repères rapides (titres significatifs / rentables /
+    compliqués) de la page Analyse par titre."""
+    df_i = df[df["Code_Analytique"].isin(titres)]
+
+    def par_compte(prefix_list, col):
+        if not prefix_list:
+            return pd.Series(0.0, index=titres)
+        mask = df_i["Compte"].astype(str).str.startswith(tuple(prefix_list))
+        return df_i[mask].groupby("Code_Analytique")[col].sum().reindex(titres, fill_value=0.0)
+
+    ventes  = par_compte(params["ventes"], "Crédit")
+    retours = par_compte(params["retours"], "Débit")
+    remises = par_compte(params["remises"], "Débit")
+    charges = par_compte(params["charges"], "Débit")
+    # Charges fixes imputées = quote-part de la répartition des charges indirectes sur ce
+    # titre (compte "CHARGES INDIRECTES REPARTIES", cf. module Paramétrage analytique).
+    # Reste à 0 si la répartition n'a pas été activée.
+    mask_cfi = df_i["Compte"].astype(str) == "CHARGES INDIRECTES REPARTIES"
+    charges_fixes = df_i[mask_cfi].groupby("Code_Analytique")["Débit"].sum().reindex(titres, fill_value=0.0)
+
+    res = pd.DataFrame({"Code_Analytique": titres})
+    res["Ventes HT"]  = ventes.values
+    res["Retours"]    = retours.values
+    res["Remises"]    = remises.values
+    res["CA net"]      = res["Ventes HT"] - res["Retours"] - res["Remises"]
+    res["Charges variables"] = charges.values
+    res["Marge brute"] = res["CA net"] - res["Charges variables"]
+    res["Charges fixes imputées"] = charges_fixes.values
+    res["Résultat net"] = res["Marge brute"] - res["Charges fixes imputées"]
+    res["Taux retour (%)"] = np.where(res["Ventes HT"] != 0, res["Retours"] / res["Ventes HT"] * 100, 0)
+
+    def _signal(row):
+        if row["Résultat net"] > 0 and row["Taux retour (%)"] < 20:
+            return "🟢"
+        elif row["Résultat net"] > 0 and row["Taux retour (%)"] < 35:
+            return "🟡"
+        return "🔴"
+    res["Signal"] = res.apply(_signal, axis=1)
+    return res
 
 def build_data_summary():
     """Construit un résumé textuel du pivot pour l'envoyer à Claude."""
@@ -959,8 +1015,42 @@ elif page == "📖 Analyse par titre":
         st.warning("Aucun ISBN/code analytique détecté dans les données.")
         st.stop()
 
-    st.markdown("Sélectionnez un titre puis ouvrez sa fiche détaillée — elle s'affiche dans une "
-                "fenêtre dédiée avec un mini SIG (soldes intermédiaires de gestion) et son évolution mensuelle.")
+    # ================================================
+    # REPÈRES RAPIDES : significatifs / rentables / compliqués
+    # ================================================
+    st.subheader("🧭 Repères rapides")
+    st.caption("Calculés sur l'ensemble des titres actifs, charges fixes imputées incluses "
+               "si la répartition a été activée.")
+    indicateurs = calculer_indicateurs_titres(df, params, titres)
+
+    col_signif, col_top, col_bas = st.columns(3)
+
+    def _liste_titres(container, sous_titre, df_tri, prefix_key, colonne_montant):
+        container.markdown(f"**{sous_titre}**")
+        if df_tri.empty:
+            container.caption("Aucune donnée.")
+            return
+        for _, row in df_tri.iterrows():
+            c1, c2 = container.columns([3, 1])
+            c1.markdown(f"{row['Signal']} **{row['Code_Analytique']}** — {row[colonne_montant]:,.0f} €")
+            if c2.button("Voir", key=f"{prefix_key}_{row['Code_Analytique']}", use_container_width=True):
+                afficher_fiche_titre(row["Code_Analytique"], df, params)
+
+    _liste_titres(col_signif, "📊 Les plus significatifs (CA brut)",
+                  indicateurs.sort_values("Ventes HT", ascending=False).head(5),
+                  "signif", "Ventes HT")
+    _liste_titres(col_top, "🏆 Les plus rentables (résultat net)",
+                  indicateurs.sort_values("Résultat net", ascending=False).head(5),
+                  "rent", "Résultat net")
+    _liste_titres(col_bas, "⚠️ Les plus compliqués (résultat net)",
+                  indicateurs.sort_values("Résultat net", ascending=True).head(5),
+                  "diff", "Résultat net")
+
+    st.divider()
+
+    st.markdown("Ou sélectionnez directement un titre puis ouvrez sa fiche détaillée — elle s'affiche "
+                "dans une fenêtre dédiée avec un mini SIG (soldes intermédiaires de gestion, charges "
+                "fixes imputées incluses) et son évolution mensuelle.")
     col_sel, col_btn = st.columns([3, 1])
     with col_sel:
         isbn_sel = st.selectbox("Titre (ISBN)", titres, label_visibility="collapsed")
