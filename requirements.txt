@@ -1,6 +1,8 @@
 streamlit
-streamlit-authenticator==0.4.2
 pandas
 numpy
+plotly
 openpyxl
-plotly>=5.0.0
+qrcode[pil]
+Pillow
+anthropic
