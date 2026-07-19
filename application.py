@@ -587,7 +587,13 @@ def resoudre_mapping_auteurs(df):
     col_auteur = codes_cols[idx_auteur]
     if col_auteur not in df.columns or col_auteur == "Code_Analytique":
         return {}
-    sous = df[(df["Code_Analytique"].astype(str).str.strip() != "") & (df[col_auteur].astype(str).str.strip() != "")]
+    # .notna() est indispensable AVANT la conversion en str : un NaN authentique devient la
+    # chaîne "nan" une fois converti, qui n'est pas vide et passerait donc à tort le filtre
+    # suivant, laissant fuiter une valeur NaN (float) dans le mapping — mélangée à des noms
+    # d'auteurs (str) ailleurs, elle casse tout tri/set ultérieur (comparaison float/str).
+    sous = df[(df["Code_Analytique"].astype(str).str.strip() != "")
+              & df[col_auteur].notna()
+              & (df[col_auteur].astype(str).str.strip() != "")]
     if sous.empty:
         return {}
     # Auteur le plus fréquent par ISBN, au cas où une incohérence ponctuelle existerait.
@@ -2491,7 +2497,15 @@ elif page == "✍️ Droits d'auteurs":
             st.markdown("**Statut fiscal de chaque auteur** _(conditionne le précompte URSSAF)_")
             if "statut_fiscal_auto" not in st.session_state:
                 st.session_state["statut_fiscal_auto"] = {}
-            for auteur_det in sorted(set(mapping_auto_preview.values())):
+            # Coercition défensive en str + filtrage des valeurs vides/NaN résiduelles : même si
+            # resoudre_mapping_auteurs() est censé les exclure en amont, on ne prend pas le risque
+            # qu'une valeur non-str (float NaN notamment) fasse échouer sorted()/set() (comparaison
+            # float/str impossible) et casse toute la page.
+            auteurs_detectes = sorted({
+                str(v).strip() for v in mapping_auto_preview.values()
+                if pd.notna(v) and str(v).strip() not in ("", "nan", "None")
+            })
+            for auteur_det in auteurs_detectes:
                 valeur_defaut = st.session_state["statut_fiscal_auto"].get(auteur_det, "BNC (droits d'auteur)")
                 st.session_state["statut_fiscal_auto"][auteur_det] = st.selectbox(
                     f"Statut fiscal — {auteur_det}",
@@ -2844,6 +2858,9 @@ elif page == "✍️ Droits d'auteurs":
             col_m3.metric("Contribution diffuseur (tous)",  f"{fmt_fr(df_r['Contribution diffuseur (€)'].sum(), 2)} €")
             col_m4.metric("Net versé aux auteurs",         f"{fmt_fr(df_r['Net à payer auteur (€)'].sum(), 2)} €")
 
+            total_precompte_aff  = fmt_fr(round(df_r['Précompte URSSAF (€)'].sum(), 2), 2)
+            total_diffuseur_aff  = fmt_fr(round(df_r['Contribution diffuseur (€)'].sum(), 2), 2)
+            total_urssaf_du_aff  = fmt_fr(round(df_r["Total dû à l'URSSAF (€)"].sum(), 2), 2)
             st.markdown(f"""
             <div style='padding:14px 18px; border-radius:12px; background:#eef2ff;
                         margin-top:8px; margin-bottom:8px'>
@@ -2851,10 +2868,10 @@ elif page == "✍️ Droits d'auteurs":
                     🏛️ Préparation de la déclaration URSSAF (estimation, avant provision de clôture)
                 </div>
                 <div>Précompte URSSAF à reverser (auteurs en traitements et salaires uniquement) :
-                     <b>{fmt_fr(round(df_r['Précompte URSSAF (€)'].sum(), 2), 2)} €</b></div>
+                     <b>{total_precompte_aff} €</b></div>
                 <div>Contribution diffuseur à reverser (tous auteurs) :
-                     <b>{fmt_fr(round(df_r['Contribution diffuseur (€)'].sum(), 2), 2)} €</b></div>
-                <div>Total à reverser à l'URSSAF : <b>{fmt_fr(round(df_r["Total dû à l'URSSAF (€)"].sum(), 2), 2)} €</b></div>
+                     <b>{total_diffuseur_aff} €</b></div>
+                <div>Total à reverser à l'URSSAF : <b>{total_urssaf_du_aff} €</b></div>
             </div>
             """, unsafe_allow_html=True)
 
