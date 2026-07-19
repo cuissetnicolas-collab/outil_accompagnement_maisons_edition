@@ -1334,19 +1334,33 @@ elif page == "📈 Tableau de bord éditorial":
 
     # Filtres temporels
     df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
-    df = df.dropna(subset=["Date"])
-    df["Mois"] = df["Date"].dt.to_period("M").astype(str)
     years = sorted(df["Date"].dt.year.dropna().unique().tolist())
     col_f1, col_f2 = st.columns([1, 3])
     with col_f1:
         annee = st.selectbox("Année", ["Toutes"] + [str(y) for y in years])
     if annee != "Toutes":
         df = df[df["Date"].dt.year == int(annee)]
+    # Important : on NE supprime PAS les lignes sans date ici avant le calcul des indicateurs
+    # clés. Les quote-parts de charges/produits indirects répartis (comptes "CHARGES INDIRECTES
+    # REPARTIES"/"PRODUITS INDIRECTS REPARTIS", cf. ⚙️ Paramétrage analytique) sont enregistrées
+    # avec une date vide (répartition globale sur la période, non rattachable à un mois précis).
+    # Les supprimer ici les faisait disparaître des totaux du Tableau de bord (Charges totales,
+    # Résultat net) alors qu'elles restaient prises en compte par la Synthèse financière et
+    # l'Analyse par titre — d'où l'écart entre pages. df_date_ok (sous-ensemble avec date valide)
+    # n'est utilisé que pour le graphique d'évolution mensuelle ci-dessous, qui a besoin d'un mois.
+    df_date_ok = df.dropna(subset=["Date"]).copy()
+    df_date_ok["Mois"] = df_date_ok["Date"].dt.to_period("M").astype(str)
 
     df_v = df[mask_ventes(df, params)]
     df_r = df[mask_retours(df, params)]
     df_rem = df[mask_remises(df, params)]
     df_c = df[mask_charges(df, params)]
+    # CA brut BLDD (ventes réelles, comptes configurés dans params["ventes"] uniquement, ex.
+    # 701) : base de calcul du taux de retour/remise, distincte du CA brut élargi ci-dessous.
+    # Diviser par le CA brut élargi (qui inclut commissions/subventions/produits divers)
+    # dilue artificiellement ces taux — ce ne sont pas des ventes de livres.
+    df_v_bldd = df[df["Compte"].astype(str).str.startswith(tuple(params["ventes"]))]
+    ca_brut_bldd = df_v_bldd["Crédit"].sum()
 
     # CA brut/net inclut désormais tout produit (compte 7xx) qui n'est ni un retour ni une
     # remise — commissions, subventions, reprises, produits divers... (cf. mask_ventes) : ces
@@ -1363,7 +1377,8 @@ elif page == "📈 Tableau de bord éditorial":
     # Net débit-crédit : idem module Analyse par titre (comptes 603/713 à double sens).
     charges_tot   = df_c["Débit"].sum() - df_c["Crédit"].sum()
     resultat      = ca_net - charges_tot
-    taux_retour   = (total_retours / ca_brut * 100) if ca_brut else 0
+    taux_retour   = (total_retours / ca_brut_bldd * 100) if ca_brut_bldd else 0
+    taux_remise   = (total_remises / ca_brut_bldd * 100) if ca_brut_bldd else 0
 
     # KPIs
     st.subheader("Indicateurs clés")
@@ -1375,6 +1390,9 @@ elif page == "📈 Tableau de bord éditorial":
                    "(factures annulées ou corrigées a posteriori), déjà déduites du CA net ci-dessus.")
     k3.metric("Taux de retour", f"{taux_retour:.1f} %",
               delta_color="inverse", delta="⚠️ Élevé" if taux_retour > 25 else "✅ Normal")
+    st.caption(f"ℹ️ Taux de retour et de remise calculés sur le CA brut BLDD (comptes de ventes "
+               f"configurés uniquement, hors commissions/subventions/produits divers) : "
+               f"**{fmt_fr(ca_brut_bldd, 0)} €**. Taux de remise : **{taux_remise:.1f} %**.")
     k4.metric("Charges totales", f"{fmt_fr(charges_tot, 0)} €")
     k5.metric("Résultat net", f"{fmt_fr(resultat, 0)} €",
               delta_color="normal" if resultat >= 0 else "inverse")
@@ -1385,8 +1403,13 @@ elif page == "📈 Tableau de bord éditorial":
     # Évolution mensuelle CA
     with col_g1:
         st.subheader("Évolution mensuelle")
-        trend_v = df_v.groupby("Mois")["Crédit"].sum().reset_index().rename(columns={"Crédit": "CA brut"})
-        trend_r = df_r.groupby("Mois")["Débit"].sum().reset_index().rename(columns={"Débit": "Retours"})
+        # df_date_ok : sous-ensemble à date valide (cf. filtres temporels ci-dessus) — les
+        # quote-parts indirectes réparties (sans date) sont exclues de ce graphique par mois,
+        # mais restent dans les indicateurs clés (KPIs) calculés plus haut sur df_v/df_r/etc.
+        df_v_date = df_date_ok[mask_ventes(df_date_ok, params)]
+        df_r_date = df_date_ok[mask_retours(df_date_ok, params)]
+        trend_v = df_v_date.groupby("Mois")["Crédit"].sum().reset_index().rename(columns={"Crédit": "CA brut"})
+        trend_r = df_r_date.groupby("Mois")["Débit"].sum().reset_index().rename(columns={"Débit": "Retours"})
         trend = trend_v.merge(trend_r, on="Mois", how="left").fillna(0)
         trend["CA net"] = trend["CA brut"] - trend["Retours"]
         fig = go.Figure()
@@ -2838,6 +2861,12 @@ elif page == "📊 Synthèse financière":
     df_r   = filtre_m(df, params["retours"], exclude_prefix_list=params.get("remises"))
     df_rem = filtre_m(df, params["remises"])
     df_c   = filtre_mask(df, mask_charges(df, params))
+    # CA brut BLDD (ventes réelles, comptes configurés dans params["ventes"] uniquement) : base
+    # de calcul du taux de retour/remise, distincte du CA brut élargi ci-dessous (qui inclut aussi
+    # commissions/subventions/produits divers — diviser par ce total dilue artificiellement
+    # ces taux, qui doivent rester rapportés aux seules ventes de livres).
+    df_v_bldd = df[df["Compte"].astype(str).str.startswith(tuple(params["ventes"]))]
+    ca_brut_bldd = df_v_bldd["Crédit"].sum()
 
     ca_brut       = df_v["Crédit"].sum() if not df_v.empty else 0
     # Extournes/corrections sur ventes (facture annulée/corrigée a posteriori, débit sur le
@@ -2897,7 +2926,8 @@ elif page == "📊 Synthèse financière":
             st.caption("Consultez 💰 Trésorerie prévisionnelle.")
 
     # --- Indicateur 3 — Taux de retour ---
-    taux_retour_synth = (total_retours / ca_brut * 100) if ca_brut else 0.0
+    taux_retour_synth = (total_retours / ca_brut_bldd * 100) if ca_brut_bldd else 0.0
+    taux_remise_synth = (total_remises / ca_brut_bldd * 100) if ca_brut_bldd else 0.0
     if taux_retour_synth > 30:
         alerte_synth3 = "🔴 Excessif"
     elif taux_retour_synth >= 20:
@@ -2907,6 +2937,7 @@ elif page == "📊 Synthèse financière":
     with ic3:
         st.markdown("**3️⃣ Taux de retour**")
         st.metric("Taux de retour global", f"{taux_retour_synth:.1f} %", delta=alerte_synth3, delta_color="off")
+        st.caption(f"Taux de remise : {taux_remise_synth:.1f} % (base CA brut BLDD, {fmt_fr(ca_brut_bldd, 0)} €).")
 
     # --- Indicateur 4 — Droits d'auteurs ---
     with ic4:
