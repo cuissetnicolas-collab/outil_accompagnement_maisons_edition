@@ -47,7 +47,7 @@ if "messages_agent" not in st.session_state:
 
 def login(username, password):
     users = {
-        "aurore": {"password": "12345", "name": "Aurore Demoulin"},
+        "nicolas": {"password": "12345", "name": "Nicolas Cuisset"},
         "laure.froidefond": {"password": "Laure2019$", "name": "Laure Froidefond"},
         "Bruno": {"password": "Toto1963$", "name": "Toto El Gringo"}
     }
