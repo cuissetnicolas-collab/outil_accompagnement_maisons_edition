@@ -3001,6 +3001,16 @@ elif page == "✍️ Droits d'auteurs":
                         })
 
                 df_reel = pd.DataFrame(lignes)
+
+                # Contrôle de cohérence : la contribution diffuseur est due par l'éditeur
+                # directement à l'URSSAF — elle ne doit JAMAIS transiter par le montant net versé
+                # à l'auteur. Le net théoriquement dû est donc Droits bruts − Précompte URSSAF
+                # (le précompte étant lui-même nul pour un auteur en BNC). On compare ce net
+                # théorique au montant réellement comptabilisé sur le compte "net dû" (408106
+                # par défaut) pour détecter une éventuelle confusion dans les écritures.
+                df_reel["Net théorique = Bruts - Précompte (€)"] = df_reel["Droits bruts (€)"] - df_reel["Précompte URSSAF (€)"]
+                df_reel["Écart vs comptabilisé (€)"] = df_reel["Net du a l'auteur (€)"] - df_reel["Net théorique = Bruts - Précompte (€)"]
+
                 st.session_state["df_royalties_reel"] = df_reel
 
                 if isbn_sans_auteur:
@@ -3021,6 +3031,45 @@ elif page == "✍️ Droits d'auteurs":
                         f"{', '.join(sorted(set(incoherents['Auteur'])))}. Vérifiez le statut fiscal saisi "
                         f"dans l'onglet **📋 Référentiel**, ou l'écriture comptable correspondante."
                     )
+
+                # Contrôle de cohérence : le net comptabilisé s'écarte-t-il du net théorique, et
+                # cet écart correspond-il (à peu près) à la contribution diffuseur ? Signe probable
+                # que la contribution diffuseur a été ajoutée par erreur au montant versé à
+                # l'auteur au lieu d'être reversée directement à l'URSSAF.
+                ecarts_net = df_reel[df_reel["Écart vs comptabilisé (€)"].abs() > 0.5]
+                if not ecarts_net.empty:
+                    ressemble_diffuseur = (
+                        (ecarts_net["Écart vs comptabilisé (€)"] - ecarts_net["Contribution diffuseur (€)"]).abs() < 1.0
+                    )
+                    if ressemble_diffuseur.any():
+                        auteurs_concernes = sorted(set(ecarts_net.loc[ressemble_diffuseur, "Auteur"]))
+                        st.error(
+                            f"❌ Sur {int(ressemble_diffuseur.sum())} ligne(s) ({', '.join(auteurs_concernes)}), le "
+                            f"montant comptabilisé comme « net dû à l'auteur » dépasse le net théorique (droits "
+                            f"bruts − précompte) d'un montant proche de la contribution diffuseur. La contribution "
+                            f"diffuseur semble avoir été intégrée à tort au montant versé à l'auteur : elle doit "
+                            f"être reversée **directement à l'URSSAF** par l'éditeur, jamais transiter par le net "
+                            f"payé à l'auteur. Vérifiez l'écriture de provision (comptes {compte_net_du} et "
+                            f"{compte_diffuseur})."
+                        )
+                    autres_ecarts = ecarts_net[~ressemble_diffuseur]
+                    if not autres_ecarts.empty:
+                        st.warning(
+                            f"⚠️ {len(autres_ecarts)} ligne(s) supplémentaire(s) présentent un écart entre le net "
+                            f"comptabilisé et le net théorique (Droits bruts − Précompte) qui ne correspond pas à "
+                            f"la contribution diffuseur — à vérifier au cas par cas."
+                        )
+                    with st.expander("Voir le détail des écarts net comptabilisé vs théorique"):
+                        st.dataframe(
+                            ecarts_net[["Auteur", "Titre", "Droits bruts (€)", "Précompte URSSAF (€)",
+                                        "Contribution diffuseur (€)", "Net théorique = Bruts - Précompte (€)",
+                                        "Net du a l'auteur (€)", "Écart vs comptabilisé (€)"]]
+                            .style.format({c: (lambda x: fmt_fr(x, 2)) for c in
+                                           ["Droits bruts (€)", "Précompte URSSAF (€)", "Contribution diffuseur (€)",
+                                            "Net théorique = Bruts - Précompte (€)", "Net du a l'auteur (€)",
+                                            "Écart vs comptabilisé (€)"]}),
+                            use_container_width=True
+                        )
 
                 cols_montant = ["Droits bruts (€)", "Contribution diffuseur (€)",
                                 "Précompte URSSAF (€)", "Net du a l'auteur (€)"]
