@@ -160,7 +160,10 @@ def afficher_fiche_titre(isbn_sel, df, params):
     retours_m     = df_r["Débit"].sum()
     remises_m     = df_rem["Débit"].sum()
     ca_net        = ventes_ht - retours_m - remises_m
-    charges_v     = df_c["Débit"].sum()
+    # Net débit-crédit : les comptes de charges (notamment 603/713 "variation de stock")
+    # comportent des mouvements aux deux sens ; ne sommer que le débit surestime la charge
+    # réelle lorsque le stock augmente sur la période (crédit de sens contraire).
+    charges_v     = df_c["Débit"].sum() - df_c["Crédit"].sum()
     marge_brute   = ca_net - charges_v
     charges_fixes = df_cfi["Débit"].sum()
     resultat_net  = marge_brute - charges_fixes
@@ -300,7 +303,9 @@ def calculer_indicateurs_titres(df, params, titres):
     ventes  = par_compte(params["ventes"], "Crédit")
     retours = par_compte(params["retours"], "Débit")
     remises = par_compte(params["remises"], "Débit")
-    charges = par_compte(params["charges"], "Débit")
+    # Net débit-crédit (cf. afficher_fiche_titre) : évite de surestimer les charges d'un
+    # titre dont le stock augmente sur la période (mouvement crédit du compte 603/713).
+    charges = par_compte(params["charges"], "Débit") - par_compte(params["charges"], "Crédit")
     # Charges fixes imputées = quote-part de la répartition des charges indirectes sur ce
     # titre (compte "CHARGES INDIRECTES REPARTIES", cf. module Paramétrage analytique).
     # Reste à 0 si la répartition n'a pas été activée.
@@ -969,7 +974,8 @@ elif page == "📈 Tableau de bord éditorial":
     total_retours = df_r["Débit"].sum()
     total_remises = df_rem["Débit"].sum()
     ca_net        = ca_brut - total_retours - total_remises
-    charges_tot   = df_c["Débit"].sum()
+    # Net débit-crédit : idem module Analyse par titre (comptes 603/713 à double sens).
+    charges_tot   = df_c["Débit"].sum() - df_c["Crédit"].sum()
     resultat      = ca_net - charges_tot
     taux_retour   = (total_retours / ca_brut * 100) if ca_brut else 0
 
@@ -2422,7 +2428,8 @@ elif page == "📊 Synthèse financière":
     total_retours = abs(df_r["Montant_net"].sum())  if not df_r.empty else 0
     total_remises = abs(df_rem["Montant_net"].sum()) if not df_rem.empty else 0
     ca_net        = ca_brut - total_retours - total_remises
-    charges_tot   = df_c["Débit"].sum() if not df_c.empty else 0
+    # Net débit-crédit (Montant_net déjà calculé par filtre_m ci-dessus).
+    charges_tot   = df_c["Montant_net"].sum() if not df_c.empty else 0
     resultat_net  = ca_net - charges_tot
     marge_pct     = (resultat_net / ca_brut * 100) if ca_brut else 0
 
