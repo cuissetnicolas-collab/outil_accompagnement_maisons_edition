@@ -398,6 +398,14 @@ def afficher_fiche_titre(isbn_sel, df, params):
     detail_par_poste = {"Ventes HT": df_v, "Retours": df_r, "Remises": df_rem}
 
     detail_charges = params.get("detail_charges")
+    # Compte(s) mixte(s) contenu/fabrication (cf. ⚙️ Paramétrage analytique) : un même compte
+    # (ex. 604 "Achats d'études et prestations de services") peut regrouper indifféremment des
+    # prestations de contenu et de fabrication. On scinde alors ses écritures par mot-clé
+    # détecté dans le libellé/fournisseur (ex. "REPROGRAPHIE", "PRINT") plutôt que par une
+    # répartition aléatoire, pour rester reproductible et justifiable.
+    mixte = params.get("contenu_fabrication_mixte") or {}
+    mixte_comptes = tuple(mixte.get("comptes") or [])
+    mots_cles_fab = [m.strip().upper() for m in (mixte.get("mots_cles_fabrication") or []) if m.strip()]
     if detail_charges:
         charge_rows = []
         total_detail = 0.0
@@ -417,7 +425,21 @@ def afficher_fiche_titre(isbn_sel, df, params):
             prefixes_effectifs = (list(prefixes) + list(params.get("provisions_reprises") or [])
                                    if nom == "Provision pour retour" else prefixes)
             if prefixes_effectifs:
-                df_nat = df_t[df_t["Compte"].astype(str).str.startswith(tuple(prefixes_effectifs))]
+                df_nat_prefixe = df_t[df_t["Compte"].astype(str).str.startswith(tuple(prefixes_effectifs))]
+            else:
+                df_nat_prefixe = df_t.iloc[0:0]
+            df_nat_mixte = df_t.iloc[0:0]
+            if nom in ("Contenu", "Fabrication") and mixte_comptes:
+                df_mixte_t = df_t[df_t["Compte"].astype(str).str.startswith(mixte_comptes)]
+                if not df_mixte_t.empty and mots_cles_fab:
+                    lib_upper = df_mixte_t["Libellé"].astype(str).str.upper()
+                    mask_fab = lib_upper.str.contains("|".join(mots_cles_fab), regex=True)
+                else:
+                    mask_fab = pd.Series(False, index=df_mixte_t.index)
+                df_nat_mixte = df_mixte_t[mask_fab] if nom == "Fabrication" else df_mixte_t[~mask_fab]
+                comptes_detailles.extend(mixte_comptes)
+            if prefixes_effectifs or (nom in ("Contenu", "Fabrication") and mixte_comptes):
+                df_nat = pd.concat([df_nat_prefixe, df_nat_mixte]) if not df_nat_mixte.empty else df_nat_prefixe
                 val = df_nat["Débit"].sum() - df_nat["Crédit"].sum()
                 comptes_detailles.extend(prefixes_effectifs)
             else:
@@ -819,9 +841,17 @@ elif page == "📂 Import des données":
                 # vides pour cette ligne. Les remonter ici comme "valeurs manquantes" est un faux
                 # positif systématique — le vrai contrôle de cohérence analytique se fait plus loin,
                 # dans ⚙️ Paramétrage analytique, où le mapping multi-familles est connu.
+                # Exclusions : colonnes analytiques par famille (cf. ci-dessus), et colonnes
+                # d'enrichissement/traçabilité optionnelles (ex. "Compte d'origine (avant
+                # ventilation...)" ajoutée lors d'une scission manuelle de compte comme 604/605)
+                # qui contiennent "compte" mais ne sont, par construction, renseignées que sur
+                # un sous-ensemble des lignes — les y inclure produirait un faux positif
+                # systématique sans rapport avec un vrai problème d'import.
+                mots_exclusion = ["analytique", "catégorie", "categorie", "origine", "nature",
+                                   "ventil", "traçabilité", "tracabilite"]
                 colonnes_structurelles = [c for c in df.columns if any(
                     mot in c.lower() for mot in ["compte", "débit", "debit", "crédit", "credit", "date"]
-                ) and "analytique" not in c.lower() and "catégorie" not in c.lower() and "categorie" not in c.lower()]
+                ) and not any(mot in c.lower() for mot in mots_exclusion)]
                 if colonnes_structurelles:
                     missing = df[colonnes_structurelles].isnull().sum()
                     missing = missing[missing > 0]
@@ -932,6 +962,12 @@ elif page == "⚙️ Paramétrage analytique":
                 st.session_state["cpt_dotations"] = ",".join(cfg_detail.get("Provision pour retour", cfg_detail.get("Dotations amort.", [])))
                 st.session_state["cpt_contenu"] = ",".join(cfg_detail.get("Contenu", []))
                 st.session_state["cpt_fabrication"] = ",".join(cfg_detail.get("Fabrication", []))
+                cfg_mixte = cfg_params.get("contenu_fabrication_mixte") or {}
+                st.session_state["cpt_mixte_contenu_fab"] = ",".join(cfg_mixte.get("comptes", []))
+                st.session_state["cpt_mots_cles_fab"] = ",".join(cfg_mixte.get(
+                    "mots_cles_fabrication",
+                    ["REPROGRAPHIE", "IMPRIM", "PRINT", "FAÇONNAGE", "FACONNAGE", "ROTATIVE", "REPRO"]
+                ))
 
                 nb_fam = len(cfg_noms_familles) if cfg_noms_familles else 1
                 st.session_state["map_nb_familles"] = nb_fam
@@ -1021,9 +1057,28 @@ elif page == "⚙️ Paramétrage analytique":
                                                 "ci-dessus (« Comptes reprises sur provisions ») et nettée "
                                                 "automatiquement contre les charges plutôt que comptée en CA.")
             cpt_contenu   = st.text_input("Contenu (préparation éditoriale, prépresse)", value="", key="cpt_contenu",
-                                           help="Ex. 604000000")
+                                           help="Comptes dédiés exclusivement au contenu (si votre plan comptable "
+                                                "distingue déjà contenu et fabrication sur des comptes séparés). "
+                                                "Laissez vide si vous utilisez le compte mixte ci-dessous.")
             cpt_fabrication = st.text_input("Fabrication (impression, façonnage)", value="", key="cpt_fabrication",
-                                             help="Ex. 605")
+                                             help="Comptes dédiés exclusivement à la fabrication. Ex. 605. "
+                                                  "Laissez vide si vous utilisez le compte mixte ci-dessous.")
+            cpt_mixte_contenu_fab = st.text_input(
+                "Compte mixte contenu/fabrication (scindé par mot-clé)", value="", key="cpt_mixte_contenu_fab",
+                help="Ex. 604000000 — à utiliser quand un même compte regroupe indifféremment des prestations "
+                     "de contenu (traduction, iconographie, droits d'image...) et de fabrication (impression, "
+                     "façonnage...), comme c'est souvent le cas sur un compte générique \"Achats d'études et "
+                     "prestations de services\". Chaque écriture de ce compte est classée automatiquement selon "
+                     "les mots-clés détectés dans son libellé (fournisseur) ci-dessous : les lignes qui matchent "
+                     "un mot-clé vont en Fabrication, toutes les autres vont en Contenu. Ne pas indiquer ce même "
+                     "compte dans les deux champs ci-dessus, pour éviter un double comptage.")
+            mots_cles_fabrication = st.text_input(
+                "Mots-clés « fabrication » (dans le libellé/fournisseur)", value="REPROGRAPHIE,IMPRIM,PRINT,FAÇONNAGE,FACONNAGE,ROTATIVE,REPRO",
+                key="cpt_mots_cles_fab",
+                help="Liste de mots-clés (insensible à la casse), séparés par des virgules. Toute écriture du "
+                     "compte mixte dont le libellé contient un de ces mots est classée en Fabrication ; le reste "
+                     "est classé en Contenu par défaut (plutôt qu'une répartition aléatoire, pour rester "
+                     "reproductible et justifiable). Ajustez la liste selon les noms de vos imprimeurs/façonniers.")
 
     st.subheader("Familles analytiques")
     st.caption("Votre export peut contenir plusieurs familles analytiques en parallèle "
@@ -1215,9 +1270,22 @@ elif page == "⚙️ Paramétrage analytique":
             "Contenu":             _split_comptes(cpt_contenu),
             "Fabrication":         _split_comptes(cpt_fabrication),
         }
-        # Ne conserver le détail que si au moins une nature a été renseignée — sinon
-        # la fiche titre continue d'afficher la ligne agrégée "Charges variables".
-        detail_charges_actif = any(v for v in detail_charges.values())
+        # Compte(s) mixte(s) où contenu et fabrication ne sont pas distingués par compte
+        # distinct (ex. un unique compte 604 "Achats d'études et prestations de services"
+        # utilisé aussi bien pour un imprimeur que pour un traducteur) : on scinde alors les
+        # écritures de ce compte par mot-clé détecté dans le libellé/fournisseur, plutôt que
+        # par une répartition aléatoire, pour rester reproductible et justifiable dans le
+        # mémoire (cf. ⚙️ Paramétrage analytique → Détail des charges par nature).
+        mixte_comptes = _split_comptes(cpt_mixte_contenu_fab)
+        mots_cles_fab = _split_comptes(mots_cles_fabrication)
+        contenu_fabrication_mixte = (
+            {"comptes": mixte_comptes, "mots_cles_fabrication": mots_cles_fab}
+            if mixte_comptes else None
+        )
+        # Ne conserver le détail que si au moins une nature (ou le compte mixte) a été
+        # renseignée — sinon la fiche titre continue d'afficher la ligne agrégée "Charges
+        # variables".
+        detail_charges_actif = any(v for v in detail_charges.values()) or bool(mixte_comptes)
 
         st.session_state["param_comptes"] = {
             "ventes":  [c.strip() for c in ventes_comptes.split(",")],
@@ -1228,6 +1296,7 @@ elif page == "⚙️ Paramétrage analytique":
             "provisions_reprises": [c.strip() for c in provisions_reprises_comptes.split(",") if c.strip()],
             "charges_imputees": charges_imputees,
             "detail_charges": detail_charges if detail_charges_actif else None,
+            "contenu_fabrication_mixte": contenu_fabrication_mixte,
         }
 
         # Export configuration JSON
