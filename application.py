@@ -47,7 +47,7 @@ if "messages_agent" not in st.session_state:
 
 def login(username, password):
     users = {
-        "Nicolas": {"password": "29071989", "name": "Nicolas Cuisset"},
+        "aurore": {"password": "12345", "name": "Aurore Demoulin"},
         "laure.froidefond": {"password": "Laure2019$", "name": "Laure Froidefond"},
         "Bruno": {"password": "Toto1963$", "name": "Toto El Gringo"}
     }
@@ -154,6 +154,28 @@ def filtrer_isbn_reels(df):
         mask = mask & (df["Famille_Analytique"].astype(str).str.upper() == "EDITION")
     return df[mask]
 
+def mask_retours(df_scope, params):
+    """Lignes de retours, à l'exclusion des lignes de remises. Sans cette exclusion, si le
+    compte remises (ex. 7091) est un sous-compte du compte retours (ex. 709 — cas fréquent
+    du plan comptable, 709 = "Rabais, remises, ristournes" avec 7091 en sous-compte),
+    startswith("709") capte AUSSI les lignes de remises : elles seraient alors soustraites
+    deux fois du CA net (une fois comme "retours", une fois comme "remises")."""
+    prefixes_retours = tuple(params.get("retours") or [])
+    if not prefixes_retours:
+        return pd.Series(False, index=df_scope.index)
+    mask = df_scope["Compte"].astype(str).str.startswith(prefixes_retours)
+    prefixes_remises = tuple(params.get("remises") or [])
+    if prefixes_remises:
+        mask = mask & (~df_scope["Compte"].astype(str).str.startswith(prefixes_remises))
+    return mask
+
+def mask_remises(df_scope, params):
+    """Lignes de remises (comptes configurés dans params["remises"])."""
+    prefixes_remises = tuple(params.get("remises") or [])
+    if not prefixes_remises:
+        return pd.Series(False, index=df_scope.index)
+    return df_scope["Compte"].astype(str).str.startswith(prefixes_remises)
+
 def normaliser_codes_ean(df, col="Code_Analytique"):
     """Fusionne les lignes dont le code analytique commence par le même numéro EAN mais
     diffère par un libellé légèrement différent après le tiret (casse, troncature, variante
@@ -221,8 +243,8 @@ def afficher_fiche_titre(isbn_sel, df, params):
     """Fiche détaillée d'un titre (mini SIG) affichée dans une fenêtre modale dédiée."""
     df_t = df[df["Code_Analytique"] == isbn_sel]
     df_v   = df_t[df_t["Compte"].astype(str).str.startswith(tuple(params["ventes"]))]
-    df_r   = df_t[df_t["Compte"].astype(str).str.startswith(tuple(params["retours"]))]
-    df_rem = df_t[df_t["Compte"].astype(str).str.startswith(tuple(params["remises"]))]
+    df_r   = df_t[mask_retours(df_t, params)]
+    df_rem = df_t[mask_remises(df_t, params)]
     df_c   = df_t[df_t["Compte"].astype(str).str.startswith(tuple(params["charges"]))]
 
     # Charges fixes imputées = quote-part de la répartition des charges indirectes sur ce
@@ -231,8 +253,8 @@ def afficher_fiche_titre(isbn_sel, df, params):
     df_cfi = df_t[df_t["Compte"].astype(str) == "CHARGES INDIRECTES REPARTIES"]
 
     ventes_ht     = df_v["Crédit"].sum()
-    retours_m     = df_r["Débit"].sum()
-    remises_m     = df_rem["Débit"].sum()
+    retours_m     = df_r["Débit"].sum() - df_r["Crédit"].sum()
+    remises_m     = df_rem["Débit"].sum() - df_rem["Crédit"].sum()
     ca_net        = ventes_ht - retours_m - remises_m
     # Net débit-crédit : les comptes de charges (notamment 603/713 "variation de stock")
     # comportent des mouvements aux deux sens ; ne sommer que le débit surestime la charge
@@ -443,15 +465,20 @@ def calculer_indicateurs_titres(df, params, titres):
     compliqués) de la page Analyse par titre."""
     df_i = df[df["Code_Analytique"].isin(titres)]
 
-    def par_compte(prefix_list, col):
+    def par_compte(prefix_list, col, exclude_prefix_list=None):
         if not prefix_list:
             return pd.Series(0.0, index=titres)
         mask = df_i["Compte"].astype(str).str.startswith(tuple(prefix_list))
+        if exclude_prefix_list:
+            mask = mask & (~df_i["Compte"].astype(str).str.startswith(tuple(exclude_prefix_list)))
         return df_i[mask].groupby("Code_Analytique")[col].sum().reindex(titres, fill_value=0.0)
 
     ventes  = par_compte(params["ventes"], "Crédit")
-    retours = par_compte(params["retours"], "Débit")
-    remises = par_compte(params["remises"], "Débit")
+    # Exclusion des comptes remises du filtre retours : évite un double comptage quand le
+    # compte remises (ex. 7091) est un sous-compte du compte retours (ex. 709).
+    retours = (par_compte(params["retours"], "Débit", exclude_prefix_list=params.get("remises"))
+               - par_compte(params["retours"], "Crédit", exclude_prefix_list=params.get("remises")))
+    remises = par_compte(params["remises"], "Débit") - par_compte(params["remises"], "Crédit")
     # Net débit-crédit (cf. afficher_fiche_titre) : évite de surestimer les charges d'un
     # titre dont le stock augmente sur la période (mouvement crédit du compte 603/713).
     charges = par_compte(params["charges"], "Débit") - par_compte(params["charges"], "Crédit")
@@ -1239,13 +1266,13 @@ elif page == "📈 Tableau de bord éditorial":
         df = df[df["Date"].dt.year == int(annee)]
 
     df_v = df[df["Compte"].astype(str).str.startswith(tuple(params["ventes"]))]
-    df_r = df[df["Compte"].astype(str).str.startswith(tuple(params["retours"]))]
-    df_rem = df[df["Compte"].astype(str).str.startswith(tuple(params["remises"]))]
+    df_r = df[mask_retours(df, params)]
+    df_rem = df[mask_remises(df, params)]
     df_c = df[df["Compte"].astype(str).str.startswith(tuple(params["charges"]))]
 
     ca_brut       = df_v["Crédit"].sum()
-    total_retours = df_r["Débit"].sum()
-    total_remises = df_rem["Débit"].sum()
+    total_retours = df_r["Débit"].sum() - df_r["Crédit"].sum()
+    total_remises = df_rem["Débit"].sum() - df_rem["Crédit"].sum()
     ca_net        = ca_brut - total_retours - total_remises
     # Net débit-crédit : idem module Analyse par titre (comptes 603/713 à double sens).
     charges_tot   = df_c["Débit"].sum() - df_c["Crédit"].sum()
@@ -2519,13 +2546,18 @@ elif page == "📦 Retours & Remises":
 
     seuil_alerte = st.sidebar.number_input("Seuil alerte taux de retour (%)", value=25, step=5)
 
-    def filtre(df_src, prefix_list):
+    def filtre(df_src, prefix_list, exclude_prefix_list=None):
         if not prefix_list: return pd.DataFrame()
-        f = df_src[df_src["Compte"].astype(str).str.startswith(tuple(prefix_list))].copy()
+        mask = df_src["Compte"].astype(str).str.startswith(tuple(prefix_list))
+        if exclude_prefix_list:
+            mask = mask & (~df_src["Compte"].astype(str).str.startswith(tuple(exclude_prefix_list)))
+        f = df_src[mask].copy()
         if not f.empty: f["Montant_net"] = f["Débit"] - f["Crédit"]
         return f
 
-    df_ret = filtre(df, param.get("retours", []))
+    # Exclusion des comptes remises du filtre retours (cf. mask_retours) : évite un double
+    # comptage quand le compte remises (ex. 7091) est un sous-compte du compte retours (709).
+    df_ret = filtre(df, param.get("retours", []), exclude_prefix_list=param.get("remises"))
     df_rem = filtre(df, param.get("remises", []))
     df_v   = filtre(df, param.get("ventes", []))
 
@@ -2690,14 +2722,19 @@ elif page == "📊 Synthèse financière":
     df = st.session_state["df_pivot"].copy()
     params = st.session_state["param_comptes"]
 
-    def filtre_m(df_src, prefix_list):
+    def filtre_m(df_src, prefix_list, exclude_prefix_list=None):
         if not prefix_list: return pd.DataFrame()
-        f = df_src[df_src["Compte"].astype(str).str.startswith(tuple(prefix_list))].copy()
+        mask = df_src["Compte"].astype(str).str.startswith(tuple(prefix_list))
+        if exclude_prefix_list:
+            mask = mask & (~df_src["Compte"].astype(str).str.startswith(tuple(exclude_prefix_list)))
+        f = df_src[mask].copy()
         if not f.empty: f["Montant_net"] = f["Débit"] - f["Crédit"]
         return f
 
     df_v   = filtre_m(df, params["ventes"])
-    df_r   = filtre_m(df, params["retours"])
+    # Exclusion des comptes remises du filtre retours (cf. mask_retours) : évite un double
+    # comptage quand le compte remises (ex. 7091) est un sous-compte du compte retours (709).
+    df_r   = filtre_m(df, params["retours"], exclude_prefix_list=params.get("remises"))
     df_rem = filtre_m(df, params["remises"])
     df_c   = filtre_m(df, params["charges"])
 
