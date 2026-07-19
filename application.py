@@ -10,6 +10,21 @@ import anthropic
 import json
 
 # =====================
+# FORMAT NUMERIQUE FRANCAIS
+# =====================
+def fmt_fr(x, decimals=0):
+    """Formate un nombre selon la convention francaise : espace pour le
+    separateur de milliers, virgule pour le separateur decimal (au lieu du
+    format Python par defaut, qui utilise la virgule pour les milliers et
+    peut induire en erreur un lecteur francais sur les montants en milliers)."""
+    try:
+        s = f"{float(x):,.{decimals}f}"
+    except (ValueError, TypeError):
+        return str(x)
+    return s.replace(",", "§").replace(".", ",").replace("§", " ")
+
+
+# =====================
 # CONFIGURATION PAGE
 # =====================
 st.set_page_config(
@@ -130,6 +145,31 @@ def filtrer_isbn_reels(df):
         mask = mask & (df["Famille_Analytique"].astype(str).str.upper() == "EDITION")
     return df[mask]
 
+def normaliser_codes_ean(df, col="Code_Analytique"):
+    """Fusionne les lignes dont le code analytique commence par le même numéro EAN mais
+    diffère par un libellé légèrement différent après le tiret (casse, troncature, variante
+    linguistique — ex. "9782376801436 - Villa Cavrois" vs "9782376801436 - VILLA CAVROIS").
+    Sans cette normalisation, un même titre peut être scindé en deux codes analytiques
+    distincts du seul fait d'une incohérence de saisie, faussant tous les classements et
+    fiches par titre qui s'appuient sur ce code (cf. le cas déjà rencontré du préfixe
+    "ISBN " dupliqué). Les codes vides ou les libellés globaux (charges/produits indirects)
+    ne sont pas concernés. Le libellé conservé est le plus long des libellés observés pour
+    un même numéro EAN, par simple convention (généralement le moins tronqué)."""
+    if col not in df.columns:
+        return df
+    df = df.copy()
+    codes = df[col].astype(str)
+    label_ci = st.session_state.get("labels_indirect", {}).get("charges", "CHARGES INDIRECTES")
+    label_pi = st.session_state.get("labels_indirect", {}).get("produits", "PRODUITS INDIRECTS")
+    labels_reserves = {label_ci.upper(), label_pi.upper(), "", "NAN"}
+    mask_ean = (~codes.str.strip().str.upper().isin(labels_reserves)) & codes.str.contains(" - ", regex=False)
+    if not mask_ean.any():
+        return df
+    ean_num = codes[mask_ean].str.split(" - ").str[0].str.strip()
+    canonique = codes[mask_ean].groupby(ean_num).agg(lambda s: max(s.unique(), key=len))
+    df.loc[mask_ean, col] = ean_num.map(canonique)
+    return df
+
 def _dialog_decorator(title, width="large"):
     """Retourne le décorateur st.dialog si disponible (Streamlit ≥ 1.31), sinon un
     expander déplié en repli pour rester compatible avec une version plus ancienne."""
@@ -187,23 +227,52 @@ def afficher_fiche_titre(isbn_sel, df, params):
     k1, k2, k3, k4 = st.columns(4)
     k1.metric("Taux de retour", f"{taux_ret:.1f} %")
     k2.metric("Taux de remise", f"{taux_rem:.1f} %")
-    k3.metric("Marge brute", f"{marge_brute:,.0f} €")
-    k4.metric("Résultat net (charges fixes incl.)", f"{resultat_net:,.0f} €")
+    k3.metric("Marge brute", f"{fmt_fr(marge_brute, 0)} €")
+    k4.metric("Résultat net (charges fixes incl.)", f"{fmt_fr(resultat_net, 0)} €")
     if charges_fixes == 0 and not st.session_state.get("repartition_active"):
         st.caption("ℹ️ Aucune charge fixe imputée : la répartition des charges indirectes sur les "
                    "titres actifs n'a pas été activée dans ⚙️ Paramétrage analytique.")
 
     st.markdown("#### Mini SIG — Soldes intermédiaires de gestion")
-    rows_sig = [
-        ("Ventes HT",                  ventes_ht,      "base"),
-        ("− Retours",                  -retours_m,     "deduction"),
-        ("− Remises",                  -remises_m,     "deduction"),
-        ("= CA net",                   ca_net,         "subtotal"),
-        ("− Charges variables",        -charges_v,     "deduction"),
-        ("= Marge brute",              marge_brute,    "subtotal"),
-        ("− Charges fixes imputées",   -charges_fixes, "deduction"),
-        ("= Résultat net du titre",    resultat_net,   "total"),
-    ]
+    # Détail des charges par nature (variation de stock, droits d'auteur, commercialisation,
+    # structure/gérant, dotations, contenu, fabrication) si configuré dans ⚙️ Paramétrage
+    # analytique (section "Détail des charges par nature") ; sinon, on garde la ligne agrégée
+    # "Charges variables" comme auparavant.
+    detail_charges = params.get("detail_charges")
+    if detail_charges:
+        charge_rows = []
+        total_detail = 0.0
+        for nom, prefixes in detail_charges.items():
+            if prefixes:
+                df_nat = df_t[df_t["Compte"].astype(str).str.startswith(tuple(prefixes))]
+                val = df_nat["Débit"].sum() - df_nat["Crédit"].sum()
+            else:
+                val = 0.0
+            charge_rows.append((f"− {nom}", -val, "deduction"))
+            total_detail += val
+        # Écart entre la somme des natures détaillées et le total réel des charges variables
+        # (comptes non couverts par les 7 natures ci-dessus) : affiché explicitement pour ne
+        # jamais rompre la réconciliation avec la marge brute.
+        reste = charges_v - total_detail
+        if abs(reste) > 0.5:
+            charge_rows.append(("− Autres charges directes (non détaillées)", -reste, "deduction"))
+    else:
+        charge_rows = [("− Charges variables", -charges_v, "deduction")]
+
+    rows_sig = (
+        [
+            ("Ventes HT", ventes_ht, "base"),
+            ("− Retours", -retours_m, "deduction"),
+            ("− Remises", -remises_m, "deduction"),
+            ("= CA net",  ca_net,     "subtotal"),
+        ]
+        + charge_rows
+        + [
+            ("= Marge brute",              marge_brute,    "subtotal"),
+            ("− Charges fixes imputées",   -charges_fixes, "deduction"),
+            ("= Résultat net du titre",    resultat_net,   "total"),
+        ]
+    )
     html_rows = ""
     for libelle, montant, style in rows_sig:
         if style == "subtotal":
@@ -218,7 +287,7 @@ def afficher_fiche_titre(isbn_sel, df, params):
             row_style = "font-weight:500;"
         html_rows += (f"<tr style='{row_style}'>"
                       f"<td style='padding:7px 12px; border-bottom:1px solid #eee'>{libelle}</td>"
-                      f"<td style='padding:7px 12px; border-bottom:1px solid #eee; text-align:right'>{montant:,.0f} €</td>"
+                      f"<td style='padding:7px 12px; border-bottom:1px solid #eee; text-align:right'>{fmt_fr(montant, 0)} €</td>"
                       f"</tr>")
     st.markdown(f"""
     <table style='width:100%; border-collapse:collapse; font-size:14px; border-radius:8px; overflow:hidden'>
@@ -226,16 +295,27 @@ def afficher_fiche_titre(isbn_sel, df, params):
     </table>
     """, unsafe_allow_html=True)
 
+    # Mesures du waterfall : Ventes HT (absolu), Retours/Remises (relatif), CA net (total),
+    # N lignes de charges (relatif, N variable selon que le détail par nature est actif),
+    # Marge brute (total), Charges fixes imputées (relatif), Résultat net (total).
+    measures = (
+        ["absolute", "relative", "relative", "total"]
+        + ["relative"] * len(charge_rows)
+        + ["total", "relative", "total"]
+    )
     fig_sig = go.Figure(go.Waterfall(
         orientation="v",
-        measure=["absolute", "relative", "relative", "total", "relative", "total", "relative", "total"],
+        measure=measures,
         x=[r[0] for r in rows_sig], y=[r[1] for r in rows_sig],
+        text=[f"{fmt_fr(r[1], 0)} €" for r in rows_sig],
+        textposition="outside",
         connector={"line": {"color": "gray", "width": 0.5}},
         decreasing={"marker": {"color": "#EF4444"}},
         increasing={"marker": {"color": "#10B981"}},
         totals={"marker": {"color": "#3B82F6"}}
     ))
-    fig_sig.update_layout(height=300, margin=dict(t=10), yaxis_title="€")
+    fig_sig.update_layout(height=340 if detail_charges else 300, margin=dict(t=10), yaxis_title="€",
+                           separators=", ", xaxis_tickangle=-25 if detail_charges else 0)
     st.plotly_chart(fig_sig, use_container_width=True)
 
     df_t_evol = df_t.copy()
@@ -354,9 +434,9 @@ def build_data_summary():
     summary = f"""
 DONNÉES ANALYTIQUES — MAISON D'ÉDITION INDÉPENDANTE
 ====================================================
-CA brut : {ca_brut:,.0f} €
-Total retours : {total_retours:,.0f} €
-CA net : {ca_net:,.0f} €
+CA brut : {fmt_fr(ca_brut, 0)} €
+Total retours : {fmt_fr(total_retours, 0)} €
+CA net : {fmt_fr(ca_net, 0)} €
 Taux de retour : {taux_retour:.1f} %
 Nombre de titres (ISBN) : {top['Code_Analytique'].nunique()}
 
@@ -597,6 +677,34 @@ elif page == "⚙️ Paramétrage analytique":
         charges_comptes = st.text_input("Comptes charges", value="6")
         charges_imputees = st.radio("Charges déjà imputées par section ?", ["Oui", "Non"])
 
+    with st.expander("📐 Détail des charges par nature (optionnel — mini SIG détaillé par titre)"):
+        st.caption(
+            "Renseignez ici les comptes correspondant à chaque nature de charge directe, conformément "
+            "à la décomposition retenue pour le pilotage par titre (variation de stock, droits d'auteur, "
+            "commercialisation, structure/gérant, dotations aux amortissements, contenu, fabrication). "
+            "Si cette section reste vide, la fiche titre (module **📖 Analyse par titre**) continue "
+            "d'afficher une seule ligne agrégée « Charges variables », comme aujourd'hui. Dès qu'au moins "
+            "une nature est renseignée, la fiche titre affiche un compte de résultat en cascade détaillé "
+            "par nature de charge plutôt que la ligne agrégée."
+        )
+        col_d1, col_d2 = st.columns(2)
+        with col_d1:
+            cpt_variation_stock  = st.text_input("Variation de stock", value="", key="cpt_variation_stock",
+                                                  help="Ex. 603")
+            cpt_droits_auteur    = st.text_input("Droits d'auteur", value="", key="cpt_droits_auteur_detail",
+                                                  help="Ex. 6043")
+            cpt_commercialisation = st.text_input("Commercialisation", value="", key="cpt_commercialisation",
+                                                   help="Ex. 6228,645106")
+            cpt_structure        = st.text_input("Structure / gérant", value="", key="cpt_structure",
+                                                  help="Ex. 6411,6451,6453")
+        with col_d2:
+            cpt_dotations = st.text_input("Dotations aux amortissements", value="", key="cpt_dotations",
+                                           help="Ex. 681")
+            cpt_contenu   = st.text_input("Contenu (préparation éditoriale, prépresse)", value="", key="cpt_contenu",
+                                           help="Ex. 604000000")
+            cpt_fabrication = st.text_input("Fabrication (impression, façonnage)", value="", key="cpt_fabrication",
+                                             help="Ex. 605")
+
     st.subheader("Familles analytiques")
     st.caption("Votre export peut contenir plusieurs familles analytiques en parallèle "
                "(ex. EDITION pour les ISBN, COMMUNICATION pour la création graphique, "
@@ -736,8 +844,8 @@ elif page == "⚙️ Paramétrage analytique":
             st.error("❌ Contrôle de cohérence charges/produits analytiques : anomalies détectées")
             st.write(f"- {len(df_pl_non_code)} ligne(s) de charge ou de produit sans code analytique dans "
                      f"aucune des familles mappées ({', '.join(noms_familles_actives)}) "
-                     f"(montant net non affecté : {round((df_pl_non_code['Crédit'] - df_pl_non_code['Débit']).sum(), 2):,.2f} €)")
-            st.write(f"- Écart total général / total analytique : {ecart_pl:,.2f} €")
+                     f"(montant net non affecté : {fmt_fr(round((df_pl_non_code['Crédit'] - df_pl_non_code['Débit']).sum(), 2), 2)} €)")
+            st.write(f"- Écart total général / total analytique : {fmt_fr(ecart_pl, 2)} €")
             st.dataframe(df_pl_non_code[["Compte", "Libellé", "Date", "Débit", "Crédit"]].head(50))
         else:
             st.success(f"✅ Contrôle de cohérence charges/produits analytiques : toutes les lignes 6xx/7xx sont "
@@ -763,15 +871,41 @@ elif page == "⚙️ Paramétrage analytique":
         if "Journal" in df.columns:
             group_cols.append("Journal")
         pivot = df.groupby(group_cols, as_index=False).agg({"Débit": "sum", "Crédit": "sum"})
+        # Fusionne les codes EAN dupliqués par un libellé légèrement différent (casse,
+        # troncature...) avant de figer le socle, pour que chaque titre ne remonte jamais
+        # sous deux codes analytiques distincts dans les classements et fiches par titre.
+        nb_avant = pivot["Code_Analytique"].astype(str).nunique() if "Code_Analytique" in pivot.columns else 0
+        pivot = normaliser_codes_ean(pivot, "Code_Analytique")
+        nb_apres = pivot["Code_Analytique"].astype(str).nunique() if "Code_Analytique" in pivot.columns else 0
+        if nb_avant and nb_apres < nb_avant:
+            st.info(f"ℹ️ {nb_avant - nb_apres} code(s) analytique(s) fusionné(s) automatiquement "
+                    f"(même numéro EAN, libellé légèrement différent d'une ligne à l'autre).")
 
         st.session_state["df_pivot"] = pivot
         st.session_state["df_pivot_brut"] = pivot.copy()
+        def _split_comptes(s):
+            return [c.strip() for c in s.split(",") if c.strip()]
+
+        detail_charges = {
+            "Variation de stock":  _split_comptes(cpt_variation_stock),
+            "Droits d'auteur":     _split_comptes(cpt_droits_auteur),
+            "Commercialisation":   _split_comptes(cpt_commercialisation),
+            "Structure/gérant":    _split_comptes(cpt_structure),
+            "Dotations amort.":    _split_comptes(cpt_dotations),
+            "Contenu":             _split_comptes(cpt_contenu),
+            "Fabrication":         _split_comptes(cpt_fabrication),
+        }
+        # Ne conserver le détail que si au moins une nature a été renseignée — sinon
+        # la fiche titre continue d'afficher la ligne agrégée "Charges variables".
+        detail_charges_actif = any(v for v in detail_charges.values())
+
         st.session_state["param_comptes"] = {
             "ventes":  [c.strip() for c in ventes_comptes.split(",")],
             "retours": [c.strip() for c in retours_comptes.split(",")],
             "remises": [c.strip() for c in remises_comptes.split(",")],
             "charges": [c.strip() for c in charges_comptes.split(",")],
-            "charges_imputees": charges_imputees
+            "charges_imputees": charges_imputees,
+            "detail_charges": detail_charges if detail_charges_actif else None,
         }
 
         # Export configuration JSON
@@ -821,10 +955,10 @@ elif page == "⚙️ Paramétrage analytique":
                 total_export_bldd = (df_source[mask_ctrl]["Crédit"] - df_source[mask_ctrl]["Débit"]).sum()
                 ecart_bldd = round(total_bldd - total_export_bldd, 2)
                 if abs(ecart_bldd) > 0.01:
-                    st.error(f"❌ Écart entre le relevé BLDD ({total_bldd:,.2f} €) et l'export analytique "
-                             f"({total_export_bldd:,.2f} €) : {ecart_bldd:,.2f} €")
+                    st.error(f"❌ Écart entre le relevé BLDD ({fmt_fr(total_bldd, 2)} €) et l'export analytique "
+                             f"({fmt_fr(total_export_bldd, 2)} €) : {fmt_fr(ecart_bldd, 2)} €")
                 else:
-                    st.success(f"✅ Le relevé BLDD ({total_bldd:,.2f} €) correspond à l'export analytique.")
+                    st.success(f"✅ Le relevé BLDD ({fmt_fr(total_bldd, 2)} €) correspond à l'export analytique.")
             except Exception as e:
                 st.warning(f"Impossible de lire le relevé BLDD : {e}")
         else:
@@ -858,8 +992,8 @@ elif page == "⚙️ Paramétrage analytique":
         nb_titres_actifs = len(titres_actifs)
 
         col_r1, col_r2, col_r3 = st.columns(3)
-        col_r1.metric("Charges indirectes détectées", f"{total_charges_indirectes:,.2f} €")
-        col_r2.metric("Produits indirects détectés", f"{total_produits_indirects:,.2f} €")
+        col_r1.metric("Charges indirectes détectées", f"{fmt_fr(total_charges_indirectes, 2)} €")
+        col_r2.metric("Produits indirects détectés", f"{fmt_fr(total_produits_indirects, 2)} €")
         col_r3.metric("Nombre de titres actifs", nb_titres_actifs)
 
         repartir = st.radio(
@@ -927,8 +1061,8 @@ elif page == "⚙️ Paramétrage analytique":
 
                 st.success(
                     f"✅ Répartition effectuée sur {nb_titres_actifs} titres actifs : "
-                    f"{round(total_charges_indirectes / nb_titres_actifs, 2):,.2f} € de charges et "
-                    f"{round(total_produits_indirects / nb_titres_actifs, 2):,.2f} € de produits par titre."
+                    f"{fmt_fr(round(total_charges_indirectes / nb_titres_actifs, 2), 2)} € de charges et "
+                    f"{fmt_fr(round(total_produits_indirects / nb_titres_actifs, 2), 2)} € de produits par titre."
                 )
                 st.dataframe(pivot_reparti[
                     pivot_reparti["Compte"].isin(["CHARGES INDIRECTES REPARTIES", "PRODUITS INDIRECTS REPARTIS"])
@@ -939,7 +1073,6 @@ elif page == "⚙️ Paramétrage analytique":
             st.info("Les charges et produits indirects restent regroupés sur une ligne globale "
                     "(non répartie sur les titres). Vous pourrez revenir sur ce choix à tout moment ci-dessus, "
                     "sans avoir besoin de régénérer le socle.")
-
 # =====================
 # TABLEAU DE BORD ÉDITORIAL
 # =====================
@@ -982,12 +1115,12 @@ elif page == "📈 Tableau de bord éditorial":
     # KPIs
     st.subheader("Indicateurs clés")
     k1, k2, k3, k4, k5 = st.columns(5)
-    k1.metric("CA brut", f"{ca_brut:,.0f} €")
-    k2.metric("CA net", f"{ca_net:,.0f} €", delta=f"-{total_retours+total_remises:,.0f} €")
+    k1.metric("CA brut", f"{fmt_fr(ca_brut, 0)} €")
+    k2.metric("CA net", f"{fmt_fr(ca_net, 0)} €", delta=f"-{fmt_fr(total_retours+total_remises, 0)} €")
     k3.metric("Taux de retour", f"{taux_retour:.1f} %",
               delta_color="inverse", delta="⚠️ Élevé" if taux_retour > 25 else "✅ Normal")
-    k4.metric("Charges totales", f"{charges_tot:,.0f} €")
-    k5.metric("Résultat net", f"{resultat:,.0f} €",
+    k4.metric("Charges totales", f"{fmt_fr(charges_tot, 0)} €")
+    k5.metric("Résultat net", f"{fmt_fr(resultat, 0)} €",
               delta_color="normal" if resultat >= 0 else "inverse")
 
     st.divider()
@@ -1038,6 +1171,7 @@ elif page == "📈 Tableau de bord éditorial":
                    color="Résultat", color_continuous_scale=["#EF4444", "#F59E0B", "#10B981"],
                    labels={"Code_Analytique": "ISBN / Titre", "Résultat": "Résultat net (€)"}, height=380)
     fig3.update_traces(texttemplate="%{text:,.0f}", textposition="outside")
+    fig3.update_layout(separators=", ")  # format FR : virgule decimale, espace milliers
     fig3.update_layout(showlegend=False, margin=dict(t=20))
     st.plotly_chart(fig3, use_container_width=True)
 
@@ -1078,7 +1212,7 @@ elif page == "📖 Analyse par titre":
             return
         for _, row in df_tri.iterrows():
             c1, c2 = container.columns([3, 1])
-            c1.markdown(f"{row['Signal']} **{row['Code_Analytique']}** — {row[colonne_montant]:,.0f} €")
+            c1.markdown(f"{row['Signal']} **{row['Code_Analytique']}** — {fmt_fr(row[colonne_montant], 0)} €")
             if c2.button("Voir", key=f"{prefix_key}_{row['Code_Analytique']}", use_container_width=True):
                 afficher_fiche_titre(row["Code_Analytique"], df, params)
 
@@ -1127,13 +1261,13 @@ elif page == "📖 Analyse par titre":
         cols_montant_mrg = ["CA net", "Marge brute", "Résultat net", "Droits d'auteurs période", "Résultat analytique"]
         cols_pct_mrg = ["Taux marge brute (%)", "Taux marge nette (%)", "Contribution résultat global (%)"]
         aff_mrg = indic_marge[["Code_Analytique"] + cols_montant_mrg + cols_pct_mrg + ["Alerte marge"]].sort_values("Marge brute", ascending=False)
-        formats_mrg = {c: "{:,.0f} €" for c in cols_montant_mrg}
+        formats_mrg = {c: (lambda x: f"{fmt_fr(x, 0)} €") for c in cols_montant_mrg}
         formats_mrg.update({c: "{:.1f} %" for c in cols_pct_mrg})
         st.dataframe(aff_mrg.style.format(formats_mrg), use_container_width=True, hide_index=True)
         var_stock_mrg = df[df["Compte"].astype(str).str.startswith(("603", "713"))]
         variation_stock_mrg = (var_stock_mrg["Crédit"] - var_stock_mrg["Débit"]).sum()
         st.caption(f"ℹ️ Variation de stock globale (comptes 603/713, non ventilée par titre) : "
-                   f"**{variation_stock_mrg:,.0f} €**.")
+                   f"**{fmt_fr(variation_stock_mrg, 0)} €**.")
 
     st.divider()
 
@@ -1298,10 +1432,10 @@ elif page == "💰 Trésorerie prévisionnelle":
 
     # ---- Indicateurs ----
     m1, m2, m3 = st.columns(3)
-    m1.metric("Trésorerie à l'ouverture", f"{tresorerie_ouverture:,.0f} €")
-    m2.metric("Trésorerie à la clôture (réalisé)", f"{treso_real.iloc[-1]:,.0f} €",
-              delta=f"{treso_real.iloc[-1] - tresorerie_ouverture:,.0f} €")
-    m3.metric("Flux net généré (période réalisée)", f"{flux_net_total.sum():,.0f} €")
+    m1.metric("Trésorerie à l'ouverture", f"{fmt_fr(tresorerie_ouverture, 0)} €")
+    m2.metric("Trésorerie à la clôture (réalisé)", f"{fmt_fr(treso_real.iloc[-1], 0)} €",
+              delta=f"{fmt_fr(treso_real.iloc[-1] - tresorerie_ouverture, 0)} €")
+    m3.metric("Flux net généré (période réalisée)", f"{fmt_fr(flux_net_total.sum(), 0)} €")
 
     # ---- Tableau détaillé (réalisé) ----
     display_rows, display_index = [], []
@@ -1325,7 +1459,7 @@ elif page == "💰 Trésorerie prévisionnelle":
             return ["font-weight: bold; background-color: rgba(59,130,246,0.12)"] * len(row)
         return [""] * len(row)
 
-    st.dataframe(df_affiche.style.apply(style_lignes, axis=1).format("{:,.0f} €"), use_container_width=True)
+    st.dataframe(df_affiche.style.apply(style_lignes, axis=1).format((lambda x: f"{fmt_fr(x, 0)} €")), use_container_width=True)
 
     # ---- Projection (scénarios) ----
     def base_ligne(key):
@@ -1435,7 +1569,7 @@ elif page == "💰 Trésorerie prévisionnelle":
                 alerte_i2 = "🟠 Sous le seuil de sécurité"
             else:
                 alerte_i2 = "🟢 Normal"
-            st.metric("Solde prévisionnel — mois à venir", f"{treso_real.iloc[-1] + flux_central_i2.iloc[0]:,.0f} €", delta=alerte_i2)
+            st.metric("Solde prévisionnel — mois à venir", f"{fmt_fr(treso_real.iloc[-1] + flux_central_i2.iloc[0], 0)} €", delta=alerte_i2)
 
         col_bfr1, col_bfr2 = st.columns(2)
         cpt_fabrication_i2 = col_bfr1.text_input("Comptes fabrication (décaissements)", value="604,605", key="ind2_cpt_fab")
@@ -1445,14 +1579,14 @@ elif page == "💰 Trésorerie prévisionnelle":
         df_bldd_i2 = df_tr[df_tr["Compte"] == cpt_bldd_i2]
         encaissements_bldd_i2 = df_bldd_i2["Crédit"].sum()
         bfr_editorial = decaissements_fab_i2 - encaissements_bldd_i2
-        st.metric("BFR éditorial (décaissements fabrication − encaissements BLDD)", f"{bfr_editorial:,.0f} €")
+        st.metric("BFR éditorial (décaissements fabrication − encaissements BLDD)", f"{fmt_fr(bfr_editorial, 0)} €")
 
         if not df_bldd_i2.empty and df_bldd_i2["Débit"].sum() > 0:
             solde_client_bldd = df_bldd_i2["Débit"].sum() - df_bldd_i2["Crédit"].sum()
             ca_facture_bldd = df_bldd_i2["Débit"].sum()
             nb_jours_periode_i2 = (df_tr["Date"].dropna().max() - df_tr["Date"].dropna().min()).days or 365
             dso_bldd = solde_client_bldd / ca_facture_bldd * nb_jours_periode_i2
-            st.metric("Délai moyen d'encaissement BLDD (DSO estimé)", f"{dso_bldd:,.0f} jours")
+            st.metric("Délai moyen d'encaissement BLDD (DSO estimé)", f"{fmt_fr(dso_bldd, 0)} jours")
             st.caption("Estimé par : solde du compte client BLDD à date / CA facturé BLDD sur la période × nombre "
                        "de jours de la période (proxy DSO standard).")
         else:
@@ -1472,7 +1606,7 @@ elif page == "💰 Trésorerie prévisionnelle":
         taux_remise_moyen_i2 = (df_rem_i2["Débit"].sum() / df_v_i2["Crédit"].sum()) if df_v_i2["Crédit"].sum() else 0.0
         seuil_mensuel_ca = (charges_fixes_mensuelles_i2 / (1 - taux_remise_moyen_i2)
                             if taux_remise_moyen_i2 < 1 else charges_fixes_mensuelles_i2)
-        st.metric("Seuil mensuel de CA (charges fixes / (1 − taux de remise moyen))", f"{seuil_mensuel_ca:,.0f} €")
+        st.metric("Seuil mensuel de CA (charges fixes / (1 − taux de remise moyen))", f"{fmt_fr(seuil_mensuel_ca, 0)} €")
         st.caption("⚠️ Les comptes ventes (701) et remises (7091) utilisés ici sont ceux du secteur livre standard "
                    "— ajustez-les via ⚙️ Paramétrage analytique si les vôtres diffèrent.")
 
@@ -1644,7 +1778,7 @@ elif page == "✍️ Droits d'auteurs":
             rows_display = []
             for idx, c in enumerate(ref):
                 paliers_str = " | ".join(
-                    f">{p['seuil']:,.0f}€ → {p['taux']}%" for p in c["paliers"]
+                    f">{fmt_fr(p['seuil'], 0)}€ → {p['taux']}%" for p in c["paliers"]
                 )
                 rows_display.append({
                     "#": idx,
@@ -1764,17 +1898,17 @@ elif page == "✍️ Droits d'auteurs":
             else:
                 st.dataframe(
                     df_resultats.style.format({
-                        "CA brut (€)": "{:,.2f}",
-                        "Retours (€)": "{:,.2f}",
-                        "Remises (€)": "{:,.2f}",
-                        "Base calcul (€)": "{:,.2f}",
-                        "Droits bruts (€)": "{:,.2f}",
+                        "CA brut (€)": (lambda x: fmt_fr(x, 2)),
+                        "Retours (€)": (lambda x: fmt_fr(x, 2)),
+                        "Remises (€)": (lambda x: fmt_fr(x, 2)),
+                        "Base calcul (€)": (lambda x: fmt_fr(x, 2)),
+                        "Droits bruts (€)": (lambda x: fmt_fr(x, 2)),
                     }),
                     use_container_width=True
                 )
 
                 total_droits = df_resultats["Droits bruts (€)"].sum()
-                st.metric("💰 Total droits d'auteurs bruts dus", f"{total_droits:,.2f} €")
+                st.metric("💰 Total droits d'auteurs bruts dus", f"{fmt_fr(total_droits, 2)} €")
 
                 # Graphique droits par titre
                 fig_droits = px.bar(
@@ -1847,16 +1981,16 @@ elif page == "✍️ Droits d'auteurs":
             ]
             st.dataframe(
                 df_r[cols_urssaf].style.format({
-                    c: "{:,.2f}" for c in cols_urssaf if "(€)" in c
+                    c: (lambda x: fmt_fr(x, 2)) for c in cols_urssaf if "(€)" in c
                 }),
                 use_container_width=True
             )
 
             # Totaux
             col_m1, col_m2, col_m3 = st.columns(3)
-            col_m1.metric("Droits bruts totaux",       f"{df_r['Droits bruts (€)'].sum():,.2f} €")
-            col_m2.metric("Total cotisations URSSAF",  f"{df_r['Total cotisations (€)'].sum():,.2f} €")
-            col_m3.metric("Net versé aux auteurs",      f"{df_r['Net à payer auteur (€)'].sum():,.2f} €")
+            col_m1.metric("Droits bruts totaux",       f"{fmt_fr(df_r['Droits bruts (€)'].sum(), 2)} €")
+            col_m2.metric("Total cotisations URSSAF",  f"{fmt_fr(df_r['Total cotisations (€)'].sum(), 2)} €")
+            col_m3.metric("Net versé aux auteurs",      f"{fmt_fr(df_r['Net à payer auteur (€)'].sum(), 2)} €")
 
             # Graphique cotisations vs net
             df_urssaf_chart = df_r.groupby("Auteur", as_index=False).agg({
@@ -1985,7 +2119,7 @@ elif page == "✍️ Droits d'auteurs":
                 cols_montant = ["Droits bruts (€)", "Contribution diffuseur (€)",
                                 "URSSAF precompte+diffuseur (€)", "Net du a l'auteur (€)"]
                 st.dataframe(
-                    df_reel.style.format({c: "{:,.2f}" for c in cols_montant}),
+                    df_reel.style.format({c: (lambda x: fmt_fr(x, 2)) for c in cols_montant}),
                     use_container_width=True
                 )
 
@@ -1993,9 +2127,9 @@ elif page == "✍️ Droits d'auteurs":
                 total_urssaf       = df_reel["URSSAF precompte+diffuseur (€)"].sum()
                 total_net_du       = df_reel["Net du a l'auteur (€)"].sum()
                 col_m1, col_m2, col_m3 = st.columns(3)
-                col_m1.metric("Droits bruts comptabilisés", f"{total_droits_bruts:,.2f} €")
-                col_m2.metric("URSSAF (précompte + diffuseur)", f"{total_urssaf:,.2f} €")
-                col_m3.metric("Net dû aux auteurs", f"{total_net_du:,.2f} €")
+                col_m1.metric("Droits bruts comptabilisés", f"{fmt_fr(total_droits_bruts, 2)} €")
+                col_m2.metric("URSSAF (précompte + diffuseur)", f"{fmt_fr(total_urssaf, 2)} €")
+                col_m3.metric("Net dû aux auteurs", f"{fmt_fr(total_net_du, 2)} €")
 
                 df_par_auteur_reel = df_reel.groupby("Auteur", as_index=False)[cols_montant].sum()
                 fig_reel = px.bar(
@@ -2016,7 +2150,7 @@ elif page == "✍️ Droits d'auteurs":
                 st.markdown("**Droits dus par auteur** _(net après précompte, tel que comptabilisé)_")
                 st.dataframe(
                     df_par_auteur_reel.sort_values("Net du a l'auteur (€)", ascending=False)
-                                      .style.format({c: "{:,.2f}" for c in cols_montant}),
+                                      .style.format({c: (lambda x: fmt_fr(x, 2)) for c in cols_montant}),
                     use_container_width=True
                 )
 
@@ -2026,8 +2160,8 @@ elif page == "✍️ Droits d'auteurs":
                     <div style='font-weight:600; font-size:15px; margin-bottom:6px'>
                         🏛️ Déclaration URSSAF à effectuer sur cette période
                     </div>
-                    <div>Précompte + contribution diffuseur à reverser : <b>{total_urssaf:,.2f} €</b></div>
-                    <div>Assis sur des droits bruts comptabilisés de : <b>{total_droits_bruts:,.2f} €</b></div>
+                    <div>Précompte + contribution diffuseur à reverser : <b>{fmt_fr(total_urssaf, 2)} €</b></div>
+                    <div>Assis sur des droits bruts comptabilisés de : <b>{fmt_fr(total_droits_bruts, 2)} €</b></div>
                 </div>
                 """, unsafe_allow_html=True)
 
@@ -2106,12 +2240,12 @@ elif page == "✍️ Droits d'auteurs":
                         ca_net_total4 = ca_net_i4.sum()
 
                         ia1, ia2, ia3 = st.columns(3)
-                        ia1.metric("Droits bruts comptabilisés (historique)", f"{indic4['Droits comptabilisés (réel, historique)'].sum():,.0f} €")
-                        ia2.metric("À-valoir restant à amortir (total)", f"{indic4['À-valoir restant à amortir'].sum():,.0f} €")
+                        ia1.metric("Droits bruts comptabilisés (historique)", f"{fmt_fr(indic4['Droits comptabilisés (réel, historique)'].sum(), 0)} €")
+                        ia2.metric("À-valoir restant à amortir (total)", f"{fmt_fr(indic4['À-valoir restant à amortir'].sum(), 0)} €")
                         taux_moyen_droits_ca4 = (indic4["Droits comptabilisés (réel, historique)"].sum() / ca_net_total4 * 100) if ca_net_total4 else 0.0
                         ia3.metric("Taux moyen droits d'auteurs / CA net", f"{taux_moyen_droits_ca4:.1f} %" if ca_net_total4 else "N/A")
 
-                        formats_i4 = {c: "{:,.0f} €" for c in ["Droits comptabilisés (réel, historique)", "À-valoir initial (cumul débit)",
+                        formats_i4 = {c: (lambda x: f"{fmt_fr(x, 0)} €") for c in ["Droits comptabilisés (réel, historique)", "À-valoir initial (cumul débit)",
                                                                 "Droits cumulés versés (cumul crédit)", "À-valoir restant à amortir"]}
                         formats_i4["Taux de couverture (%)"] = "{:.1f} %"
                         st.dataframe(
@@ -2122,7 +2256,7 @@ elif page == "✍️ Droits d'auteurs":
                         base_i4 = ca_net_i4.iloc[-3:].mean() if len(ca_net_i4) >= 3 else (ca_net_i4.mean() if len(ca_net_i4) else 0.0)
                         droits_prev_6mois = base_i4 * 6 * taux_contractuel4
                         st.metric("Droits prévisionnels sur 6 mois (estimation, taux contractuel appliqué au CA net moyen)",
-                                  f"{droits_prev_6mois:,.0f} €")
+                                  f"{fmt_fr(droits_prev_6mois, 0)} €")
 
                         echeance_semestrielle = pd.Timestamp.today() >= pd.Timestamp("2027-12-20")
                         st.caption(
@@ -2178,7 +2312,7 @@ elif page == "✍️ Droits d'auteurs":
 
             st.dataframe(
                 df_auteur[cols_dispo].style.format({
-                    c: "{:,.2f}" for c in cols_dispo if "(€)" in c
+                    c: (lambda x: fmt_fr(x, 2)) for c in cols_dispo if "(€)" in c
                 }),
                 use_container_width=True
             )
@@ -2189,7 +2323,7 @@ elif page == "✍️ Droits d'auteurs":
                 cols_sum = {c: "sum" for c in cols_dispo if "(€)" in c}
                 df_synth = df_releves.groupby("Auteur", as_index=False).agg(cols_sum)
                 st.dataframe(
-                    df_synth.style.format({c: "{:,.2f}" for c in cols_sum}),
+                    df_synth.style.format({c: (lambda x: fmt_fr(x, 2)) for c in cols_sum}),
                     use_container_width=True
                 )
 
@@ -2260,8 +2394,8 @@ elif page == "📦 Retours & Remises":
     taux_rem = (total_remises / total_ventes * 100) if total_ventes else 0
 
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("CA brut", f"{total_ventes:,.0f} €")
-    c2.metric("Total retours", f"{total_retours:,.0f} €")
+    c1.metric("CA brut", f"{fmt_fr(total_ventes, 0)} €")
+    c2.metric("Total retours", f"{fmt_fr(total_retours, 0)} €")
     c3.metric("Taux de retour", f"{taux_ret:.1f} %",
               delta="⚠️ Dépasse le seuil !" if taux_ret > seuil_alerte else "✅ Normal",
               delta_color="inverse" if taux_ret > seuil_alerte else "normal")
@@ -2274,8 +2408,8 @@ elif page == "📦 Retours & Remises":
     df_prov = df[df["Compte"].astype(str).str.startswith("681")]
     provision = (df_prov["Débit"] - df_prov["Crédit"]).sum() if not df_prov.empty else 0
     ecart = total_retours - provision
-    st.info(f"📋 Provision retours comptabilisée (681) : **{provision:,.0f} €** — "
-            f"Écart avec retours réels : **{ecart:,.0f} €** "
+    st.info(f"📋 Provision retours comptabilisée (681) : **{fmt_fr(provision, 0)} €** — "
+            f"Écart avec retours réels : **{fmt_fr(ecart, 0)} €** "
             f"({'sous-provision' if ecart > 0 else 'sur-provision'})")
 
     col_g1, col_g2 = st.columns(2)
@@ -2285,6 +2419,7 @@ elif page == "📦 Retours & Remises":
             fig1 = px.bar(trend_ret, x="Mois", y="Montant_net", title="Retours mensuels (€)",
                            text="Montant_net", labels={"Montant_net": "€"}, color_discrete_sequence=["#EF4444"])
             fig1.update_traces(texttemplate="%{text:,.0f}", textposition="outside")
+            fig1.update_layout(separators=", ")  # format FR : virgule decimale, espace milliers
             fig1.update_layout(height=320, margin=dict(t=40))
             st.plotly_chart(fig1, use_container_width=True)
     if not df_rem.empty:
@@ -2293,6 +2428,7 @@ elif page == "📦 Retours & Remises":
             fig2 = px.bar(trend_rem, x="Mois", y="Montant_net", title="Remises mensuelles (€)",
                            text="Montant_net", labels={"Montant_net": "€"}, color_discrete_sequence=["#F59E0B"])
             fig2.update_traces(texttemplate="%{text:,.0f}", textposition="outside")
+            fig2.update_layout(separators=", ")  # format FR : virgule decimale, espace milliers
             fig2.update_layout(height=320, margin=dict(t=40))
             st.plotly_chart(fig2, use_container_width=True)
 
@@ -2304,7 +2440,7 @@ elif page == "📦 Retours & Remises":
             ret_isbn = df_ret_isbn.groupby("Code_Analytique")["Montant_net"].sum().abs().reset_index()
             ret_isbn = ret_isbn.sort_values("Montant_net", ascending=False)
             st.subheader("Retours par titre")
-            st.dataframe(ret_isbn.style.format({"Montant_net": "{:,.0f} €"}), hide_index=True)
+            st.dataframe(ret_isbn.style.format({"Montant_net": (lambda x: f"{fmt_fr(x, 0)} €")}), hide_index=True)
 
     # ================================================
     # INDICATEUR 3 — SOUS-INDICATEURS DE PILOTAGE
@@ -2322,8 +2458,8 @@ elif page == "📦 Retours & Remises":
             alerte_ref3 = "🟢 Cible sectorielle atteinte"
         r1, r2, r3 = st.columns(3)
         r1.metric("Taux de retour (seuils référentiel 20 %/30 %)", f"{taux_ret:.1f} %", delta=alerte_ref3)
-        r2.metric("Provision pour retours futurs (10 % ventes brutes TTC)", f"{provision_retours:,.0f} €")
-        r3.metric("Ventes nettes (après retours + provision)", f"{ventes_nettes_globales:,.0f} €")
+        r2.metric("Provision pour retours futurs (10 % ventes brutes TTC)", f"{fmt_fr(provision_retours, 0)} €")
+        r3.metric("Ventes nettes (après retours + provision)", f"{fmt_fr(ventes_nettes_globales, 0)} €")
 
         idx_collection = next((i for i, n in enumerate(st.session_state.get("noms_familles_actives", []))
                                 if "collection" in n.lower()), None)
@@ -2394,8 +2530,8 @@ elif page == "📦 Retours & Remises":
             st.markdown("**Coût financier des retours et ratio Parly par titre**")
             aff3_ret = indic3_ret[["Retours", "Coût financier des retours (€)", "Nb exemplaires vendus nets (est.)",
                                    "Tirage initial (ex.)", "Ratio ventes nettes / tirage (Parly)", "Alerte Parly"]]
-            st.dataframe(aff3_ret.style.format({"Retours": "{:,.0f} €", "Coût financier des retours (€)": "{:,.0f} €",
-                                                "Nb exemplaires vendus nets (est.)": "{:,.0f}",
+            st.dataframe(aff3_ret.style.format({"Retours": (lambda x: f"{fmt_fr(x, 0)} €"), "Coût financier des retours (€)": (lambda x: f"{fmt_fr(x, 0)} €"),
+                                                "Nb exemplaires vendus nets (est.)": (lambda x: fmt_fr(x, 0)),
                                                 "Ratio ventes nettes / tirage (Parly)": "{:.2f}"}),
                         use_container_width=True)
             st.caption("Le nombre d'exemplaires retournés/vendus est estimé en divisant les montants € par le "
@@ -2471,9 +2607,9 @@ elif page == "📊 Synthèse financière":
             if scenarios_synth and len(scenarios_synth["Central"].sum()) > 0:
                 solde_m1 = treso_real_synth.iloc[-1] + scenarios_synth["Central"].sum().iloc[0]
                 alerte_synth2 = "🔴 Négatif" if solde_m1 < 0 else "🟢 Positif"
-                st.metric("Solde prévisionnel (M+1)", f"{solde_m1:,.0f} €", delta=alerte_synth2, delta_color="off")
+                st.metric("Solde prévisionnel (M+1)", f"{fmt_fr(solde_m1, 0)} €", delta=alerte_synth2, delta_color="off")
             else:
-                st.metric("Trésorerie de clôture (réalisé)", f"{treso_real_synth.iloc[-1]:,.0f} €")
+                st.metric("Trésorerie de clôture (réalisé)", f"{fmt_fr(treso_real_synth.iloc[-1], 0)} €")
         else:
             st.caption("Consultez 💰 Trésorerie prévisionnelle.")
 
@@ -2496,7 +2632,7 @@ elif page == "📊 Synthèse financière":
         avance_credit_synth = df[df["Compte"].astype(str) == "409600"]["Crédit"].sum()
         avalent_restant_synth = avance_debit_synth - avance_credit_synth
         if avance_debit_synth > 0:
-            st.metric("À-valoir restant à amortir", f"{avalent_restant_synth:,.0f} €")
+            st.metric("À-valoir restant à amortir", f"{fmt_fr(avalent_restant_synth, 0)} €")
         else:
             st.caption("Aucune écriture sur le compte 409600.")
 
@@ -2505,7 +2641,7 @@ elif page == "📊 Synthèse financière":
     col1, col2 = st.columns([1.2, 1])
     with col1:
         st.subheader("Compte de résultat synthétique")
-        st.dataframe(df_summary.style.format({"Montant (€)": "{:,.0f}"}), hide_index=True, height=280)
+        st.dataframe(df_summary.style.format({"Montant (€)": (lambda x: fmt_fr(x, 0))}), hide_index=True, height=280)
         st.metric("Taux de marge nette", f"{marge_pct:.1f} %")
     with col2:
         st.subheader("Waterfall")
