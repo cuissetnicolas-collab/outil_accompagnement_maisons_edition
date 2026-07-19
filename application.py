@@ -176,6 +176,34 @@ def mask_remises(df_scope, params):
         return pd.Series(False, index=df_scope.index)
     return df_scope["Compte"].astype(str).str.startswith(prefixes_remises)
 
+# Comptes "placeholder" (non numériques) générés par la répartition des charges/produits
+# indirects sur les titres actifs (cf. ⚙️ Paramétrage analytique → Répartition). Une fois
+# la répartition activée, les lignes "CHARGES INDIRECTES"/"PRODUITS INDIRECTS" d'origine
+# (portées sur de vrais comptes 6xx/7xx) sont RETIRÉES du pivot et remplacées par ces
+# quote-parts par titre — qui ne matchent plus un préfixe "6"/"701" classique. Sans en
+# tenir compte, les totaux globaux (Tableau de bord, Synthèse financière) sous-évaluent
+# les charges/produits exactement du montant réparti.
+COMPTE_CHARGES_INDIRECTES_REPARTIES = "CHARGES INDIRECTES REPARTIES"
+COMPTE_PRODUITS_INDIRECTS_REPARTIS = "PRODUITS INDIRECTS REPARTIS"
+
+def mask_ventes(df_scope, params):
+    """Lignes de ventes/produits : comptes configurés (params["ventes"]), plus la
+    quote-part de produits indirects répartis sur les titres actifs si la répartition a
+    été activée (cf. COMPTE_PRODUITS_INDIRECTS_REPARTIS ci-dessus)."""
+    prefixes_ventes = tuple(params.get("ventes") or [])
+    mask = (df_scope["Compte"].astype(str).str.startswith(prefixes_ventes)
+            if prefixes_ventes else pd.Series(False, index=df_scope.index))
+    return mask | (df_scope["Compte"].astype(str) == COMPTE_PRODUITS_INDIRECTS_REPARTIS)
+
+def mask_charges(df_scope, params):
+    """Lignes de charges : comptes configurés (params["charges"]), plus la quote-part de
+    charges indirectes réparties sur les titres actifs si la répartition a été activée
+    (cf. COMPTE_CHARGES_INDIRECTES_REPARTIES ci-dessus)."""
+    prefixes_charges = tuple(params.get("charges") or [])
+    mask = (df_scope["Compte"].astype(str).str.startswith(prefixes_charges)
+            if prefixes_charges else pd.Series(False, index=df_scope.index))
+    return mask | (df_scope["Compte"].astype(str) == COMPTE_CHARGES_INDIRECTES_REPARTIES)
+
 def normaliser_codes_ean(df, col="Code_Analytique"):
     """Fusionne les lignes dont le code analytique commence par le même numéro EAN mais
     diffère par un libellé légèrement différent après le tiret (casse, troncature, variante
@@ -245,7 +273,16 @@ def afficher_fiche_titre(isbn_sel, df, params):
     df_v   = df_t[df_t["Compte"].astype(str).str.startswith(tuple(params["ventes"]))]
     df_r   = df_t[mask_retours(df_t, params)]
     df_rem = df_t[mask_remises(df_t, params)]
-    df_c   = df_t[df_t["Compte"].astype(str).str.startswith(tuple(params["charges"]))]
+    # Variation de stock (compte 603/713 par défaut, configurable via params["stock"]) : isolée
+    # des charges variables "directes" et de la marge brute. Mélangé aux autres comptes 6xx, ce
+    # compte peut faire apparaître un titre comme très rentable alors que le coût de ses invendus
+    # est seulement différé (stock en hausse = crédit sur ce compte) et non absent — cf. anomalie
+    # constatée sur "Les Couleurs de l'Exil" (marge brute et résultat net gonflés par un crédit de
+    # stock de 7 625 € pour seulement 5 436 € de ventes).
+    prefixes_stock = tuple(params.get("stock") or ["603"])
+    df_c     = df_t[df_t["Compte"].astype(str).str.startswith(tuple(params["charges"]))
+                     & (~df_t["Compte"].astype(str).str.startswith(prefixes_stock))]
+    df_stock = df_t[df_t["Compte"].astype(str).str.startswith(prefixes_stock)]
 
     # Charges fixes imputées = quote-part de la répartition des charges indirectes sur ce
     # titre précis (compte "CHARGES INDIRECTES REPARTIES", généré si la répartition au nombre
@@ -256,10 +293,12 @@ def afficher_fiche_titre(isbn_sel, df, params):
     retours_m     = df_r["Débit"].sum() - df_r["Crédit"].sum()
     remises_m     = df_rem["Débit"].sum() - df_rem["Crédit"].sum()
     ca_net        = ventes_ht - retours_m - remises_m
-    # Net débit-crédit : les comptes de charges (notamment 603/713 "variation de stock")
-    # comportent des mouvements aux deux sens ; ne sommer que le débit surestime la charge
-    # réelle lorsque le stock augmente sur la période (crédit de sens contraire).
-    charges_v     = df_c["Débit"].sum() - df_c["Crédit"].sum()
+    # Net débit-crédit, hors variation de stock (isolée ci-dessus) : ne sommer que le débit
+    # surestimerait la charge réelle lorsque le stock augmente sur la période (crédit de sens
+    # contraire) ; l'inclure dans les charges variables gonflerait ou dégonflerait à tort la
+    # marge brute et le résultat net du titre.
+    charges_v       = df_c["Débit"].sum() - df_c["Crédit"].sum()
+    variation_stock = df_stock["Débit"].sum() - df_stock["Crédit"].sum()
     marge_brute   = ca_net - charges_v
     charges_fixes = df_cfi["Débit"].sum()
     resultat_net  = marge_brute - charges_fixes
@@ -288,6 +327,16 @@ def afficher_fiche_titre(isbn_sel, df, params):
     if charges_fixes == 0 and not st.session_state.get("repartition_active"):
         st.caption("ℹ️ Aucune charge fixe imputée : la répartition des charges indirectes sur les "
                    "titres actifs n'a pas été activée dans ⚙️ Paramétrage analytique.")
+    if abs(variation_stock) > 0.5:
+        if variation_stock < 0:
+            st.caption(f"ℹ️ Stock de ce titre en hausse sur la période (crédit net de "
+                       f"{fmt_fr(-variation_stock, 0)} € sur le compte de variation de stock) — montant "
+                       "**non inclus** dans la marge brute et le résultat net ci-dessus : le coût des "
+                       "invendus est différé, pas absent.")
+        else:
+            st.caption(f"ℹ️ Stock de ce titre en baisse sur la période (débit net de "
+                       f"{fmt_fr(variation_stock, 0)} € sur le compte de variation de stock) — montant "
+                       "**non inclus** dans la marge brute et le résultat net ci-dessus.")
 
     st.markdown("#### Mini SIG — Soldes intermédiaires de gestion")
     # Détail des charges par nature (variation de stock, droits d'auteur, commercialisation,
@@ -305,6 +354,14 @@ def afficher_fiche_titre(isbn_sel, df, params):
         total_detail = 0.0
         comptes_detailles = []
         for nom, prefixes in detail_charges.items():
+            # Le compte de variation de stock (603/713, cf. df_stock ci-dessus) est déjà isolé
+            # et affiché à part (message d'information sous les indicateurs) : on ignore ici
+            # toute nature qui le couvrirait, pour ne pas le compter deux fois et ne pas fausser
+            # le calcul de "reste" ci-dessous (qui se réconcilie avec charges_v, lequel exclut
+            # déjà ce compte).
+            if prefixes and any(str(p) == str(sp) or str(p).startswith(str(sp)) or str(sp).startswith(str(p))
+                                 for p in prefixes for sp in prefixes_stock):
+                continue
             if prefixes:
                 df_nat = df_t[df_t["Compte"].astype(str).str.startswith(tuple(prefixes))]
                 val = df_nat["Débit"].sum() - df_nat["Crédit"].sum()
@@ -479,9 +536,14 @@ def calculer_indicateurs_titres(df, params, titres):
     retours = (par_compte(params["retours"], "Débit", exclude_prefix_list=params.get("remises"))
                - par_compte(params["retours"], "Crédit", exclude_prefix_list=params.get("remises")))
     remises = par_compte(params["remises"], "Débit") - par_compte(params["remises"], "Crédit")
-    # Net débit-crédit (cf. afficher_fiche_titre) : évite de surestimer les charges d'un
-    # titre dont le stock augmente sur la période (mouvement crédit du compte 603/713).
-    charges = par_compte(params["charges"], "Débit") - par_compte(params["charges"], "Crédit")
+    # Variation de stock (compte 603/713 par défaut, configurable via params["stock"]) : exclue
+    # des charges variables et affichée à part (cf. afficher_fiche_titre). Mélangée aux comptes
+    # 6xx "classiques", elle peut faire apparaître un titre comme très rentable alors que le coût
+    # de ses invendus est seulement différé (stock en hausse = crédit sur ce compte), pas absent.
+    prefixes_stock = params.get("stock") or ["603"]
+    charges = (par_compte(params["charges"], "Débit", exclude_prefix_list=prefixes_stock)
+               - par_compte(params["charges"], "Crédit", exclude_prefix_list=prefixes_stock))
+    variation_stock = par_compte(prefixes_stock, "Débit") - par_compte(prefixes_stock, "Crédit")
     # Charges fixes imputées = quote-part de la répartition des charges indirectes sur ce
     # titre (compte "CHARGES INDIRECTES REPARTIES", cf. module Paramétrage analytique).
     # Reste à 0 si la répartition n'a pas été activée.
@@ -495,6 +557,7 @@ def calculer_indicateurs_titres(df, params, titres):
     res["CA net"]      = res["Ventes HT"] - res["Retours"] - res["Remises"]
     res["Charges variables"] = charges.values
     res["Marge brute"] = res["CA net"] - res["Charges variables"]
+    res["Variation de stock (info, hors marge)"] = variation_stock.values
     res["Charges fixes imputées"] = charges_fixes.values
     res["Résultat net"] = res["Marge brute"] - res["Charges fixes imputées"]
     res["Taux retour (%)"] = np.where(res["Ventes HT"] != 0, res["Retours"] / res["Ventes HT"] * 100, 0)
@@ -1265,10 +1328,10 @@ elif page == "📈 Tableau de bord éditorial":
     if annee != "Toutes":
         df = df[df["Date"].dt.year == int(annee)]
 
-    df_v = df[df["Compte"].astype(str).str.startswith(tuple(params["ventes"]))]
+    df_v = df[mask_ventes(df, params)]
     df_r = df[mask_retours(df, params)]
     df_rem = df[mask_remises(df, params)]
-    df_c = df[df["Compte"].astype(str).str.startswith(tuple(params["charges"]))]
+    df_c = df[mask_charges(df, params)]
 
     ca_brut       = df_v["Crédit"].sum()
     total_retours = df_r["Débit"].sum() - df_r["Crédit"].sum()
@@ -2731,12 +2794,21 @@ elif page == "📊 Synthèse financière":
         if not f.empty: f["Montant_net"] = f["Débit"] - f["Crédit"]
         return f
 
-    df_v   = filtre_m(df, params["ventes"])
+    def filtre_mask(df_src, mask):
+        f = df_src[mask].copy()
+        if not f.empty: f["Montant_net"] = f["Débit"] - f["Crédit"]
+        return f
+
+    # mask_ventes/mask_charges incluent aussi les quote-parts de produits/charges indirects
+    # répartis (comptes non numériques "PRODUITS INDIRECTS REPARTIS"/"CHARGES INDIRECTES
+    # REPARTIES"), sans quoi activer la répartition ferait disparaître ces montants des
+    # totaux globaux ci-dessous (ils ne matchent plus le préfixe numérique "701"/"6").
+    df_v   = filtre_mask(df, mask_ventes(df, params))
     # Exclusion des comptes remises du filtre retours (cf. mask_retours) : évite un double
     # comptage quand le compte remises (ex. 7091) est un sous-compte du compte retours (709).
     df_r   = filtre_m(df, params["retours"], exclude_prefix_list=params.get("remises"))
     df_rem = filtre_m(df, params["remises"])
-    df_c   = filtre_m(df, params["charges"])
+    df_c   = filtre_mask(df, mask_charges(df, params))
 
     ca_brut       = df_v["Crédit"].sum() if not df_v.empty else 0
     total_retours = abs(df_r["Montant_net"].sum())  if not df_r.empty else 0
