@@ -315,6 +315,16 @@ def afficher_fiche_titre(isbn_sel, df, params):
     df_c     = df_t[df_t["Compte"].astype(str).str.startswith(tuple(params["charges"]))
                      & (~df_t["Compte"].astype(str).str.startswith(prefixes_stock))]
     df_stock = df_t[df_t["Compte"].astype(str).str.startswith(prefixes_stock)]
+    # Reprises sur provisions (ex. 781/7810 = reprise de provision pour retour, cf. ⚙️
+    # Paramétrage analytique → "Comptes reprises sur provisions") : nettées ici directement
+    # contre les charges directes de ce titre, en contrepartie de la dotation initiale (ex.
+    # 6810, nature "Provision pour retour" ci-dessous) — uniquement si ces écritures portent
+    # le code analytique de ce titre précis ; sinon (provision gérée au niveau société), le
+    # montant reste à 0 pour ce titre et n'apparaît que dans les totaux globaux.
+    prefixes_prov_reprises_t = tuple(params.get("provisions_reprises") or [])
+    df_prov_reprises_t = (df_t[df_t["Compte"].astype(str).str.startswith(prefixes_prov_reprises_t)]
+                           if prefixes_prov_reprises_t else df_t.iloc[0:0])
+    net_prov_reprises_t = df_prov_reprises_t["Crédit"].sum() - df_prov_reprises_t["Débit"].sum()
 
     # Charges fixes imputées = quote-part de la répartition des charges indirectes sur ce
     # titre précis (compte "CHARGES INDIRECTES REPARTIES", généré si la répartition au nombre
@@ -329,7 +339,7 @@ def afficher_fiche_titre(isbn_sel, df, params):
     # surestimerait la charge réelle lorsque le stock augmente sur la période (crédit de sens
     # contraire) ; l'inclure dans les charges variables gonflerait ou dégonflerait à tort la
     # marge brute et le résultat net du titre.
-    charges_v       = df_c["Débit"].sum() - df_c["Crédit"].sum()
+    charges_v       = (df_c["Débit"].sum() - df_c["Crédit"].sum()) - net_prov_reprises_t
     variation_stock = df_stock["Débit"].sum() - df_stock["Crédit"].sum()
     marge_brute   = ca_net - charges_v
     charges_fixes = df_cfi["Débit"].sum()
@@ -401,10 +411,15 @@ def afficher_fiche_titre(isbn_sel, df, params):
             if prefixes and any(str(p) == str(sp) or str(p).startswith(str(sp)) or str(sp).startswith(str(p))
                                  for p in prefixes for sp in prefixes_stock):
                 continue
-            if prefixes:
-                df_nat = df_t[df_t["Compte"].astype(str).str.startswith(tuple(prefixes))]
+            # La nature "Provision pour retour" inclut automatiquement le(s) compte(s) de
+            # reprise sur provisions configuré(s) (params["provisions_reprises"], ex. 781/7810),
+            # pour imputer la reprise à la dotation initiale sur cette même ligne, comme demandé.
+            prefixes_effectifs = (list(prefixes) + list(params.get("provisions_reprises") or [])
+                                   if nom == "Provision pour retour" else prefixes)
+            if prefixes_effectifs:
+                df_nat = df_t[df_t["Compte"].astype(str).str.startswith(tuple(prefixes_effectifs))]
                 val = df_nat["Débit"].sum() - df_nat["Crédit"].sum()
-                comptes_detailles.extend(prefixes)
+                comptes_detailles.extend(prefixes_effectifs)
             else:
                 df_nat = df_t.iloc[0:0]
                 val = 0.0
@@ -589,6 +604,13 @@ def calculer_indicateurs_titres(df, params, titres):
     charges = (par_compte(params["charges"], "Débit", exclude_prefix_list=prefixes_stock)
                - par_compte(params["charges"], "Crédit", exclude_prefix_list=prefixes_stock))
     variation_stock = par_compte(prefixes_stock, "Débit") - par_compte(prefixes_stock, "Crédit")
+    # Reprises sur provisions (ex. 781/7810) nettées contre les charges directes du titre — cf.
+    # afficher_fiche_titre, même logique. Reste à 0 pour les titres où la reprise n'est pas
+    # taguée par ISBN (provision gérée au niveau société).
+    prefixes_prov_reprises = params.get("provisions_reprises") or []
+    net_prov_reprises_titre = (par_compte(prefixes_prov_reprises, "Crédit")
+                                - par_compte(prefixes_prov_reprises, "Débit"))
+    charges = charges - net_prov_reprises_titre
     # Charges fixes imputées = quote-part de la répartition des charges indirectes sur ce
     # titre (compte "CHARGES INDIRECTES REPARTIES", cf. module Paramétrage analytique).
     # Reste à 0 si la répartition n'a pas été activée.
