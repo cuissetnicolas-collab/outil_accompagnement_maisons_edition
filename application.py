@@ -204,6 +204,21 @@ def mask_charges(df_scope, params):
             if prefixes_charges else pd.Series(False, index=df_scope.index))
     return mask | (df_scope["Compte"].astype(str) == COMPTE_CHARGES_INDIRECTES_REPARTIES)
 
+def mask_autres_produits(df_scope, params):
+    """Produits comptabilisés sur des comptes 7xx AUTRES que les ventes (701), les
+    retours/remises (709) ou leur quote-part déjà réintégrée via la répartition (compte
+    PRODUITS INDIRECTS REPARTIS, déjà couvert par mask_ventes) : commissions libraires (706),
+    produits divers de gestion courante (708/758), variation de stock de produits finis
+    (7134), subventions (740), reprises sur provisions (781), produits financiers (768)...
+
+    Sans cette ligne, ces produits bien réels — près de 67 k€ sur le grand livre du cas
+    d'étude, dont seulement ~8,8 k€ récupérés via la répartition des "PRODUITS INDIRECTS" —
+    disparaissent purement et simplement du résultat net du Tableau de bord et de la
+    Synthèse financière, qui ne se réconciliaient alors plus avec le résultat comptable réel
+    (somme de tous les comptes 6 et 7 du grand livre)."""
+    is_7 = df_scope["Compte"].astype(str).str.startswith("7")
+    return is_7 & (~mask_ventes(df_scope, params)) & (~mask_retours(df_scope, params)) & (~mask_remises(df_scope, params))
+
 def normaliser_codes_ean(df, col="Code_Analytique"):
     """Fusionne les lignes dont le code analytique commence par le même numéro EAN mais
     diffère par un libellé légèrement différent après le tiret (casse, troncature, variante
@@ -1332,25 +1347,41 @@ elif page == "📈 Tableau de bord éditorial":
     df_r = df[mask_retours(df, params)]
     df_rem = df[mask_remises(df, params)]
     df_c = df[mask_charges(df, params)]
+    df_autres = df[mask_autres_produits(df, params)]
 
     ca_brut       = df_v["Crédit"].sum()
+    # Extournes/corrections sur ventes : le compte de ventes lui-même porte parfois un débit
+    # (facture annulée/corrigée a posteriori). Sans le déduire ici, le résultat net final ne se
+    # réconcilie pas exactement avec le total comptable réel des comptes 6/7 — écart constaté
+    # de 439,81 € sur le grand livre du cas d'étude (3 écritures d'extourne).
+    corrections_ventes = df_v["Débit"].sum()
     total_retours = df_r["Débit"].sum() - df_r["Crédit"].sum()
     total_remises = df_rem["Débit"].sum() - df_rem["Crédit"].sum()
-    ca_net        = ca_brut - total_retours - total_remises
+    ca_net        = ca_brut - total_retours - total_remises - corrections_ventes
     # Net débit-crédit : idem module Analyse par titre (comptes 603/713 à double sens).
     charges_tot   = df_c["Débit"].sum() - df_c["Crédit"].sum()
-    resultat      = ca_net - charges_tot
+    # Produits hors ventes de livres (commissions, subventions, reprises, produits divers...) :
+    # sans cette ligne, le résultat net ne se réconcilie pas avec le total comptable réel des
+    # comptes 6/7 (cf. mask_autres_produits ci-dessus).
+    autres_produits = df_autres["Crédit"].sum() - df_autres["Débit"].sum()
+    resultat      = ca_net - charges_tot + autres_produits
     taux_retour   = (total_retours / ca_brut * 100) if ca_brut else 0
 
     # KPIs
     st.subheader("Indicateurs clés")
-    k1, k2, k3, k4, k5 = st.columns(5)
+    k1, k2, k3, k4, k5, k6 = st.columns(6)
     k1.metric("CA brut", f"{fmt_fr(ca_brut, 0)} €")
-    k2.metric("CA net", f"{fmt_fr(ca_net, 0)} €", delta=f"-{fmt_fr(total_retours+total_remises, 0)} €")
+    k2.metric("CA net", f"{fmt_fr(ca_net, 0)} €", delta=f"-{fmt_fr(total_retours+total_remises+corrections_ventes, 0)} €")
+    if corrections_ventes:
+        st.caption(f"ℹ️ Dont {fmt_fr(corrections_ventes, 0)} € d'extournes/corrections sur ventes "
+                   "(factures annulées ou corrigées a posteriori), déjà déduites du CA net ci-dessus.")
     k3.metric("Taux de retour", f"{taux_retour:.1f} %",
               delta_color="inverse", delta="⚠️ Élevé" if taux_retour > 25 else "✅ Normal")
     k4.metric("Charges totales", f"{fmt_fr(charges_tot, 0)} €")
-    k5.metric("Résultat net", f"{fmt_fr(resultat, 0)} €",
+    k5.metric("Autres produits", f"{fmt_fr(autres_produits, 0)} €",
+              help="Commissions, subventions, reprises sur provisions, produits divers de gestion "
+                   "courante... comptabilisés sur des comptes 7xx autres que les ventes (701).")
+    k6.metric("Résultat net", f"{fmt_fr(resultat, 0)} €",
               delta_color="normal" if resultat >= 0 else "inverse")
 
     st.divider()
@@ -2809,18 +2840,27 @@ elif page == "📊 Synthèse financière":
     df_r   = filtre_m(df, params["retours"], exclude_prefix_list=params.get("remises"))
     df_rem = filtre_m(df, params["remises"])
     df_c   = filtre_mask(df, mask_charges(df, params))
+    # Produits hors ventes de livres (commissions, subventions, reprises, produits divers...) :
+    # sans cette ligne, le résultat net ne se réconcilie pas avec le total comptable réel des
+    # comptes 6/7 (cf. mask_autres_produits, module Analyse par titre).
+    df_autres = filtre_mask(df, mask_autres_produits(df, params))
 
     ca_brut       = df_v["Crédit"].sum() if not df_v.empty else 0
+    # Extournes/corrections sur ventes (facture annulée/corrigée a posteriori, débit sur le
+    # compte de ventes lui-même) : sans les déduire, le résultat net ne se réconcilie pas
+    # exactement avec le total comptable réel des comptes 6/7 (cf. Tableau de bord éditorial).
+    corrections_ventes = df_v["Débit"].sum() if not df_v.empty else 0
     total_retours = abs(df_r["Montant_net"].sum())  if not df_r.empty else 0
     total_remises = abs(df_rem["Montant_net"].sum()) if not df_rem.empty else 0
-    ca_net        = ca_brut - total_retours - total_remises
+    ca_net        = ca_brut - total_retours - total_remises - corrections_ventes
     # Net débit-crédit (Montant_net déjà calculé par filtre_m ci-dessus).
-    charges_tot   = df_c["Montant_net"].sum() if not df_c.empty else 0
-    resultat_net  = ca_net - charges_tot
+    charges_tot     = df_c["Montant_net"].sum() if not df_c.empty else 0
+    autres_produits = -df_autres["Montant_net"].sum() if not df_autres.empty else 0
+    resultat_net  = ca_net - charges_tot + autres_produits
     marge_pct     = (resultat_net / ca_brut * 100) if ca_brut else 0
 
-    soldes = [ca_brut, -total_retours, -total_remises, ca_net, -charges_tot, resultat_net]
-    libelles = ["CA brut", "Retours", "Remises", "CA net", "Charges", "Résultat net"]
+    soldes = [ca_brut, -total_retours, -total_remises, -corrections_ventes, ca_net, -charges_tot, autres_produits, resultat_net]
+    libelles = ["CA brut", "Retours", "Remises", "Corrections ventes", "CA net", "Charges", "Autres produits", "Résultat net"]
     df_summary = pd.DataFrame({"Poste": libelles, "Montant (€)": soldes})
 
     # ================================================
@@ -2895,12 +2935,12 @@ elif page == "📊 Synthèse financière":
         st.metric("Taux de marge nette", f"{marge_pct:.1f} %")
     with col2:
         st.subheader("Waterfall")
-        colors = ["#3B82F6", "#EF4444", "#EF4444", "#10B981", "#EF4444",
+        colors = ["#3B82F6", "#EF4444", "#EF4444", "#EF4444", "#10B981", "#EF4444", "#10B981",
                   "#10B981" if resultat_net >= 0 else "#EF4444"]
         fig = go.Figure(go.Waterfall(
             name="Résultat",
             orientation="v",
-            measure=["absolute", "relative", "relative", "total", "relative", "total"],
+            measure=["absolute", "relative", "relative", "relative", "total", "relative", "relative", "total"],
             x=libelles, y=soldes,
             connector={"line": {"color": "gray", "width": 0.5}},
             decreasing={"marker": {"color": "#EF4444"}},
