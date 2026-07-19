@@ -286,6 +286,10 @@ def afficher_fiche_titre(isbn_sel, df, params):
     """Fiche détaillée d'un titre (mini SIG) affichée dans une fenêtre modale dédiée."""
     df_t = df[df["Code_Analytique"] == isbn_sel]
     df_v   = df_t[df_t["Compte"].astype(str).str.startswith(tuple(params["ventes"]))]
+    # CA distributeur (ex. compte BLDD 7011 pour ce cas d'étude — configurable, non limité à un
+    # distributeur particulier) : base STRICTE du taux de retour/remise de ce titre — distincte
+    # du CA net du titre (df_v ci-dessus, ventes larges 701) utilisé pour la marge/le résultat.
+    df_v_distrib_t = df_t[df_t["Compte"].astype(str).str.startswith(tuple(params.get("ventes_distributeur") or params["ventes"]))]
     df_r   = df_t[mask_retours(df_t, params)]
     df_rem = df_t[mask_remises(df_t, params)]
     # Variation de stock (compte 603/713 par défaut, configurable via params["stock"]) : isolée
@@ -317,8 +321,9 @@ def afficher_fiche_titre(isbn_sel, df, params):
     marge_brute   = ca_net - charges_v
     charges_fixes = df_cfi["Débit"].sum()
     resultat_net  = marge_brute - charges_fixes
-    taux_ret      = (retours_m / ventes_ht * 100) if ventes_ht else 0
-    taux_rem      = (remises_m / ventes_ht * 100) if ventes_ht else 0
+    ventes_distrib_t = df_v_distrib_t["Crédit"].sum()
+    taux_ret      = (retours_m / ventes_distrib_t * 100) if ventes_distrib_t else 0
+    taux_rem      = (remises_m / ventes_distrib_t * 100) if ventes_distrib_t else 0
 
     if resultat_net > 0 and taux_ret < 20:
         signal, bg, fg = "🟢 Titre rentable", "#d1fae5", "#065f46"
@@ -546,6 +551,10 @@ def calculer_indicateurs_titres(df, params, titres):
         return df_i[mask].groupby("Code_Analytique")[col].sum().reindex(titres, fill_value=0.0)
 
     ventes  = par_compte(params["ventes"], "Crédit")
+    # CA distributeur (compte configurable, ex. BLDD 7011 pour ce cas d'étude) : base STRICTE
+    # du taux de retour — distinct de "Ventes HT" ci-dessus (périmètre large 701) utilisé pour
+    # la marge/le résultat.
+    ventes_distrib = par_compte(params.get("ventes_distributeur") or params["ventes"], "Crédit")
     # Exclusion des comptes remises du filtre retours : évite un double comptage quand le
     # compte remises (ex. 7091) est un sous-compte du compte retours (ex. 709).
     retours = (par_compte(params["retours"], "Débit", exclude_prefix_list=params.get("remises"))
@@ -575,7 +584,7 @@ def calculer_indicateurs_titres(df, params, titres):
     res["Variation de stock (info, hors marge)"] = variation_stock.values
     res["Charges fixes imputées"] = charges_fixes.values
     res["Résultat net"] = res["Marge brute"] - res["Charges fixes imputées"]
-    res["Taux retour (%)"] = np.where(res["Ventes HT"] != 0, res["Retours"] / res["Ventes HT"] * 100, 0)
+    res["Taux retour (%)"] = np.where(ventes_distrib.values != 0, res["Retours"] / ventes_distrib.values * 100, 0)
 
     def _signal(row):
         if row["Résultat net"] > 0 and row["Taux retour (%)"] < 20:
@@ -800,7 +809,7 @@ elif page == "📂 Import des données":
             st.session_state["df_pivot"] = pivot
             st.session_state["df_pivot_brut"] = pivot.copy()
             st.session_state["param_comptes"] = {
-                "ventes": ["701"], "retours": ["709"],
+                "ventes": ["701"], "ventes_distributeur": ["701"], "retours": ["709"],
                 "remises": ["7091"], "charges": ["6"],
                 "charges_imputees": "Oui"
             }
@@ -864,6 +873,9 @@ elif page == "⚙️ Paramétrage analytique":
                     st.session_state["map_journal_col"] = cfg_inv.get("Journal", "")
 
                 st.session_state["map_ventes_comptes"] = ",".join(cfg_params.get("ventes", ["701"]))
+                st.session_state["map_ventes_distributeur_comptes"] = ",".join(
+                    cfg_params.get("ventes_distributeur", cfg_params.get("ventes_bldd", cfg_params.get("ventes", ["7011"])))
+                )
                 st.session_state["map_retours_comptes"] = ",".join(cfg_params.get("retours", ["709"]))
                 st.session_state["map_remises_comptes"] = ",".join(cfg_params.get("remises", ["7091"]))
                 st.session_state["map_charges_comptes"] = ",".join(cfg_params.get("charges", ["6"]))
@@ -912,7 +924,20 @@ elif page == "⚙️ Paramétrage analytique":
         )
     with col2:
         st.subheader("Comptes comptables")
-        ventes_comptes  = st.text_input("Comptes ventes", value="701", key="map_ventes_comptes")
+        ventes_comptes  = st.text_input("Comptes ventes (CA large)", value="701", key="map_ventes_comptes",
+                                         help="Tous les sous-comptes de ventes (ex. 701 = 7010 + 7011 + ...), "
+                                              "utilisés pour le CA brut/net affiché.")
+        ventes_distributeur_comptes = st.text_input(
+            "Compte(s) ventes distributeur (base taux de retour/remise)", value="7011",
+            key="map_ventes_distributeur_comptes",
+            help="Sous-compte(s) strictement dédié(s) au(x) distributeur(s)/diffuseur(s) dont émane le relevé "
+                 "de retours/remises (ex. 7011 pour le distributeur BLDD de ce cas d'étude — à adapter pour "
+                 "tout autre distributeur, ou pour en cumuler plusieurs séparés par une virgule). Distinct du "
+                 "CA large ci-dessus. Les taux de retour et de remise sont calculés uniquement sur ce "
+                 "périmètre — le relevé du distributeur ne couvre que ce(s) canal/canaux, pas les autres "
+                 "sous-comptes de ventes (ex. 7010...) ni les autres produits inclus dans le CA élargi (708, "
+                 "commissions, subventions...)."
+        )
         retours_comptes = st.text_input("Comptes retours", value="709", key="map_retours_comptes")
         remises_comptes = st.text_input("Comptes remises", value="7091", key="map_remises_comptes")
         charges_comptes = st.text_input("Comptes charges", value="6", key="map_charges_comptes")
@@ -1142,6 +1167,7 @@ elif page == "⚙️ Paramétrage analytique":
 
         st.session_state["param_comptes"] = {
             "ventes":  [c.strip() for c in ventes_comptes.split(",")],
+            "ventes_distributeur": [c.strip() for c in ventes_distributeur_comptes.split(",")] if ventes_distributeur_comptes.strip() else [c.strip() for c in ventes_comptes.split(",")],
             "retours": [c.strip() for c in retours_comptes.split(",")],
             "remises": [c.strip() for c in remises_comptes.split(",")],
             "charges": [c.strip() for c in charges_comptes.split(",")],
@@ -1355,30 +1381,42 @@ elif page == "📈 Tableau de bord éditorial":
     df_r = df[mask_retours(df, params)]
     df_rem = df[mask_remises(df, params)]
     df_c = df[mask_charges(df, params)]
-    # CA brut BLDD (ventes réelles, comptes configurés dans params["ventes"] uniquement, ex.
-    # 701) : base de calcul du taux de retour/remise, distincte du CA brut élargi ci-dessous.
-    # Diviser par le CA brut élargi (qui inclut commissions/subventions/produits divers)
-    # dilue artificiellement ces taux — ce ne sont pas des ventes de livres.
-    df_v_bldd = df[df["Compte"].astype(str).str.startswith(tuple(params["ventes"]))]
-    ca_brut_bldd = df_v_bldd["Crédit"].sum()
+    # CA distributeur (compte configurable, ex. 7011 = BLDD pour ce cas d'étude, adaptable à
+    # tout autre distributeur) : base STRICTE de calcul du taux de retour/remise — distincte
+    # du périmètre "ventes" large (params["ventes"], ex. 701 = 7010 + 7011 + ...) utilisé juste
+    # en dessous pour les extournes, et du CA brut élargi (commissions/subventions/produits
+    # divers). Le relevé du distributeur ne couvre que ce canal de vente précis : diviser par
+    # un périmètre plus large (701 entier, ou le CA élargi) dilue artificiellement ces taux.
+    prefixes_ca_distrib = tuple(params.get("ventes_distributeur") or params["ventes"])
+    df_ca_distrib = df[df["Compte"].astype(str).str.startswith(prefixes_ca_distrib)]
+    ca_brut_distrib = df_ca_distrib["Crédit"].sum()
+
+    df_v_large = df[df["Compte"].astype(str).str.startswith(tuple(params["ventes"]))]
+    # Extourne stricte sur le(s) compte(s) de ventes configuré(s) au sens large (ex. 701) :
+    # facture annulée ou corrigée a posteriori — c'est le seul sens réel de « extourne sur ventes ».
+    extournes_ventes = df_v_large["Débit"].sum()
 
     # CA brut/net inclut désormais tout produit (compte 7xx) qui n'est ni un retour ni une
     # remise — commissions, subventions, reprises, produits divers... (cf. mask_ventes) : ces
     # montants ne sont pas isolés dans une ligne séparée, ils sont directement dans le CA.
     ca_brut       = df_v["Crédit"].sum()
-    # Extournes/corrections sur ventes : le compte de ventes lui-même porte parfois un débit
-    # (facture annulée/corrigée a posteriori). Sans le déduire ici, le résultat net final ne se
-    # réconcilie pas exactement avec le total comptable réel des comptes 6/7 — écart constaté
-    # de 439,81 € sur le grand livre du cas d'étude (3 écritures d'extourne).
+    # corrections_ventes = TOUS les débits du périmètre élargi "ventes" (mask_ventes), donc
+    # extournes sur 701 + tout débit sur les autres comptes de produits (commissions,
+    # subventions, produits divers, reprises...) repris dans ce même périmètre depuis que
+    # celui-ci a été élargi (cf. mask_ventes). Il faut le déduire en totalité pour que le
+    # résultat net se réconcilie avec le total comptable réel des comptes 6/7, mais on
+    # distingue ci-dessous la part qui concerne réellement une extourne de vente du reste,
+    # pour ne pas induire en erreur sur la nature de ce montant.
     corrections_ventes = df_v["Débit"].sum()
+    autres_regul_produits = corrections_ventes - extournes_ventes
     total_retours = df_r["Débit"].sum() - df_r["Crédit"].sum()
     total_remises = df_rem["Débit"].sum() - df_rem["Crédit"].sum()
     ca_net        = ca_brut - total_retours - total_remises - corrections_ventes
     # Net débit-crédit : idem module Analyse par titre (comptes 603/713 à double sens).
     charges_tot   = df_c["Débit"].sum() - df_c["Crédit"].sum()
     resultat      = ca_net - charges_tot
-    taux_retour   = (total_retours / ca_brut_bldd * 100) if ca_brut_bldd else 0
-    taux_remise   = (total_remises / ca_brut_bldd * 100) if ca_brut_bldd else 0
+    taux_retour   = (total_retours / ca_brut_distrib * 100) if ca_brut_distrib else 0
+    taux_remise   = (total_remises / ca_brut_distrib * 100) if ca_brut_distrib else 0
 
     # KPIs
     st.subheader("Indicateurs clés")
@@ -1386,13 +1424,20 @@ elif page == "📈 Tableau de bord éditorial":
     k1.metric("CA brut", f"{fmt_fr(ca_brut, 0)} €")
     k2.metric("CA net", f"{fmt_fr(ca_net, 0)} €", delta=f"-{fmt_fr(total_retours+total_remises+corrections_ventes, 0)} €")
     if corrections_ventes:
-        st.caption(f"ℹ️ Dont {fmt_fr(corrections_ventes, 0)} € d'extournes/corrections sur ventes "
-                   "(factures annulées ou corrigées a posteriori), déjà déduites du CA net ci-dessus.")
+        st.caption(
+            f"ℹ️ Dont {fmt_fr(corrections_ventes, 0)} € de corrections déduites du CA net ci-dessus : "
+            f"{fmt_fr(extournes_ventes, 0)} € d'extournes/corrections sur ventes proprement dites "
+            f"(compte{'s' if len(params['ventes']) > 1 else ''} {', '.join(params['ventes'])}, factures "
+            f"annulées ou corrigées a posteriori) et {fmt_fr(autres_regul_produits, 0)} € d'autres "
+            "régularisations (débits) sur les autres comptes de produits inclus dans le CA élargi "
+            "(commissions, subventions, produits divers, reprises...)."
+        )
     k3.metric("Taux de retour", f"{taux_retour:.1f} %",
               delta_color="inverse", delta="⚠️ Élevé" if taux_retour > 25 else "✅ Normal")
-    st.caption(f"ℹ️ Taux de retour et de remise calculés sur le CA brut BLDD (comptes de ventes "
-               f"configurés uniquement, hors commissions/subventions/produits divers) : "
-               f"**{fmt_fr(ca_brut_bldd, 0)} €**. Taux de remise : **{taux_remise:.1f} %**.")
+    st.caption(f"ℹ️ Taux de retour et de remise calculés sur le CA distributeur (compte(s) "
+               f"{', '.join(params.get('ventes_distributeur') or params['ventes'])} uniquement, hors "
+               f"autres sous-comptes de ventes et hors commissions/subventions/produits divers) : "
+               f"**{fmt_fr(ca_brut_distrib, 0)} €**. Taux de remise : **{taux_remise:.1f} %**.")
     k4.metric("Charges totales", f"{fmt_fr(charges_tot, 0)} €")
     k5.metric("Résultat net", f"{fmt_fr(resultat, 0)} €",
               delta_color="normal" if resultat >= 0 else "inverse")
@@ -2672,12 +2717,18 @@ elif page == "📦 Retours & Remises":
     df_ret = filtre(df, param.get("retours", []), exclude_prefix_list=param.get("remises"))
     df_rem = filtre(df, param.get("remises", []))
     df_v   = filtre(df, param.get("ventes", []))
+    # CA distributeur (compte configurable, ex. 7011 = BLDD pour ce cas d'étude) : base STRICTE
+    # des taux de retour/remise, distincte du CA brut large affiché ci-dessous (params["ventes"],
+    # ex. 701 = 7010 + 7011 + ...) — cf. Tableau de bord éditorial et Synthèse financière, mêmes
+    # définitions.
+    df_v_distrib_rr = filtre(df, param.get("ventes_distributeur") or param.get("ventes", []))
 
     total_retours = abs(df_ret["Montant_net"].sum()) if not df_ret.empty else 0
     total_remises = abs(df_rem["Montant_net"].sum()) if not df_rem.empty else 0
     total_ventes  = df_v["Crédit"].sum() if not df_v.empty else 0
-    taux_ret = (total_retours / total_ventes * 100) if total_ventes else 0
-    taux_rem = (total_remises / total_ventes * 100) if total_ventes else 0
+    total_ventes_distrib = df_v_distrib_rr["Crédit"].sum() if not df_v_distrib_rr.empty else 0
+    taux_ret = (total_retours / total_ventes_distrib * 100) if total_ventes_distrib else 0
+    taux_rem = (total_remises / total_ventes_distrib * 100) if total_ventes_distrib else 0
 
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("CA brut", f"{fmt_fr(total_ventes, 0)} €")
@@ -2861,18 +2912,29 @@ elif page == "📊 Synthèse financière":
     df_r   = filtre_m(df, params["retours"], exclude_prefix_list=params.get("remises"))
     df_rem = filtre_m(df, params["remises"])
     df_c   = filtre_mask(df, mask_charges(df, params))
-    # CA brut BLDD (ventes réelles, comptes configurés dans params["ventes"] uniquement) : base
-    # de calcul du taux de retour/remise, distincte du CA brut élargi ci-dessous (qui inclut aussi
-    # commissions/subventions/produits divers — diviser par ce total dilue artificiellement
-    # ces taux, qui doivent rester rapportés aux seules ventes de livres).
-    df_v_bldd = df[df["Compte"].astype(str).str.startswith(tuple(params["ventes"]))]
-    ca_brut_bldd = df_v_bldd["Crédit"].sum()
+    # CA distributeur (compte configurable, ex. 7011 = BLDD pour ce cas d'étude) : base STRICTE
+    # de calcul du taux de retour/remise — distincte du périmètre "ventes" large (params["ventes"],
+    # ex. 701 = 7010 + 7011 + ...) utilisé juste en dessous pour les extournes, et du CA brut
+    # élargi (commissions/subventions/produits divers). Le relevé du distributeur ne couvre que
+    # ce canal de vente précis : diviser par un périmètre plus large dilue artificiellement ces taux.
+    prefixes_ca_distrib = tuple(params.get("ventes_distributeur") or params["ventes"])
+    df_ca_distrib = df[df["Compte"].astype(str).str.startswith(prefixes_ca_distrib)]
+    ca_brut_distrib = df_ca_distrib["Crédit"].sum() if not df_ca_distrib.empty else 0
+
+    df_v_large = df[df["Compte"].astype(str).str.startswith(tuple(params["ventes"]))]
+    # Extourne stricte sur le(s) compte(s) de ventes configuré(s) au sens large (ex. 701) :
+    # facture annulée ou corrigée a posteriori — c'est le seul sens réel de « extourne sur ventes ».
+    extournes_ventes = df_v_large["Débit"].sum() if not df_v_large.empty else 0
 
     ca_brut       = df_v["Crédit"].sum() if not df_v.empty else 0
-    # Extournes/corrections sur ventes (facture annulée/corrigée a posteriori, débit sur le
-    # compte de ventes lui-même) : sans les déduire, le résultat net ne se réconcilie pas
-    # exactement avec le total comptable réel des comptes 6/7 (cf. Tableau de bord éditorial).
+    # corrections_ventes = TOUS les débits du périmètre élargi "ventes" (mask_ventes) : extournes
+    # sur 701 + tout débit sur les autres comptes de produits inclus dans ce périmètre depuis
+    # son élargissement (commissions, subventions, produits divers, reprises...). Sans déduire
+    # ce total, le résultat net ne se réconcilie pas avec le total comptable réel des comptes
+    # 6/7 — mais on isole ci-dessous la part qui est une vraie extourne de vente du reste, pour
+    # ne pas induire en erreur sur la nature du montant (cf. Tableau de bord éditorial).
     corrections_ventes = df_v["Débit"].sum() if not df_v.empty else 0
+    autres_regul_produits = corrections_ventes - extournes_ventes
     total_retours = abs(df_r["Montant_net"].sum())  if not df_r.empty else 0
     total_remises = abs(df_rem["Montant_net"].sum()) if not df_rem.empty else 0
     ca_net        = ca_brut - total_retours - total_remises - corrections_ventes
@@ -2882,8 +2944,17 @@ elif page == "📊 Synthèse financière":
     marge_pct     = (resultat_net / ca_brut * 100) if ca_brut else 0
 
     soldes = [ca_brut, -total_retours, -total_remises, -corrections_ventes, ca_net, -charges_tot, resultat_net]
-    libelles = ["CA brut", "Retours", "Remises", "Corrections ventes", "CA net", "Charges", "Résultat net"]
+    libelles = ["CA brut", "Retours", "Remises", "Corrections produits", "CA net", "Charges", "Résultat net"]
     df_summary = pd.DataFrame({"Poste": libelles, "Montant (€)": soldes})
+    if corrections_ventes:
+        st.caption(
+            f"ℹ️ Corrections produits ({fmt_fr(corrections_ventes, 0)} €) = "
+            f"{fmt_fr(extournes_ventes, 0)} € d'extournes/corrections sur ventes proprement dites "
+            f"(compte{'s' if len(params['ventes']) > 1 else ''} {', '.join(params['ventes'])}) + "
+            f"{fmt_fr(autres_regul_produits, 0)} € d'autres régularisations (débits) sur les autres "
+            "comptes de produits inclus dans le CA élargi (commissions, subventions, produits divers, "
+            "reprises...)."
+        )
 
     # ================================================
     # 🚦 INDICATEURS CLÉS DE PILOTAGE (référentiel de la mission)
@@ -2926,8 +2997,8 @@ elif page == "📊 Synthèse financière":
             st.caption("Consultez 💰 Trésorerie prévisionnelle.")
 
     # --- Indicateur 3 — Taux de retour ---
-    taux_retour_synth = (total_retours / ca_brut_bldd * 100) if ca_brut_bldd else 0.0
-    taux_remise_synth = (total_remises / ca_brut_bldd * 100) if ca_brut_bldd else 0.0
+    taux_retour_synth = (total_retours / ca_brut_distrib * 100) if ca_brut_distrib else 0.0
+    taux_remise_synth = (total_remises / ca_brut_distrib * 100) if ca_brut_distrib else 0.0
     if taux_retour_synth > 30:
         alerte_synth3 = "🔴 Excessif"
     elif taux_retour_synth >= 20:
@@ -2937,7 +3008,7 @@ elif page == "📊 Synthèse financière":
     with ic3:
         st.markdown("**3️⃣ Taux de retour**")
         st.metric("Taux de retour global", f"{taux_retour_synth:.1f} %", delta=alerte_synth3, delta_color="off")
-        st.caption(f"Taux de remise : {taux_remise_synth:.1f} % (base CA brut BLDD, {fmt_fr(ca_brut_bldd, 0)} €).")
+        st.caption(f"Taux de remise : {taux_remise_synth:.1f} % (base CA distributeur, {fmt_fr(ca_brut_distrib, 0)} €).")
 
     # --- Indicateur 4 — Droits d'auteurs ---
     with ic4:
