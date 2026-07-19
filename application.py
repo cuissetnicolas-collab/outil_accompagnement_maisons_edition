@@ -1344,8 +1344,20 @@ elif page == "⚙️ Paramétrage analytique":
                 pivot_reparti = pivot_brut[~masque_ci & ~masque_pi].copy()
                 nouvelles_lignes = []
 
-                if total_charges_indirectes != 0:
-                    part_charge = round(total_charges_indirectes / nb_titres_actifs, 2)
+                # On répartit le Débit et le Crédit bruts séparément (et non le seul solde
+                # net Débit-Crédit) : certaines lignes indirectes portent à la fois du débit
+                # et du crédit (ex. régularisations/subventions avec contrepartie), et ne
+                # garder qu'une quote-part nette ferait disparaître la partie brute de ces
+                # montants des indicateurs "bruts" (ex. CA brut du Tableau de bord, qui est
+                # une somme de Crédit seul, pas un solde). Le résultat net global n'est pas
+                # affecté (Débit et Crédit sont toujours répartis dans les mêmes proportions,
+                # donc leur différence — le net réparti — reste inchangée), mais les totaux
+                # bruts restent réconciliables avec le grand livre d'origine.
+                total_ci_debit = pivot_brut[masque_ci]["Débit"].sum()
+                total_ci_credit = pivot_brut[masque_ci]["Crédit"].sum()
+                if total_ci_debit != 0 or total_ci_credit != 0:
+                    part_charge_debit = round(total_ci_debit / nb_titres_actifs, 2)
+                    part_charge_credit = round(total_ci_credit / nb_titres_actifs, 2)
                     for isbn in titres_actifs:
                         nouvelles_lignes.append({
                             "Compte": "CHARGES INDIRECTES REPARTIES",
@@ -1353,12 +1365,15 @@ elif page == "⚙️ Paramétrage analytique":
                             "Code_Analytique": isbn,
                             "Date": pd.NaT,
                             "Libellé": f"Quote-part charges indirectes ({nb_titres_actifs} titres actifs)",
-                            "Débit": part_charge,
-                            "Crédit": 0,
+                            "Débit": part_charge_debit,
+                            "Crédit": part_charge_credit,
                         })
 
-                if total_produits_indirects != 0:
-                    part_produit = round(total_produits_indirects / nb_titres_actifs, 2)
+                total_pi_debit = pivot_brut[masque_pi]["Débit"].sum()
+                total_pi_credit = pivot_brut[masque_pi]["Crédit"].sum()
+                if total_pi_debit != 0 or total_pi_credit != 0:
+                    part_produit_debit = round(total_pi_debit / nb_titres_actifs, 2)
+                    part_produit_credit = round(total_pi_credit / nb_titres_actifs, 2)
                     for isbn in titres_actifs:
                         nouvelles_lignes.append({
                             "Compte": "PRODUITS INDIRECTS REPARTIS",
@@ -1366,8 +1381,8 @@ elif page == "⚙️ Paramétrage analytique":
                             "Code_Analytique": isbn,
                             "Date": pd.NaT,
                             "Libellé": f"Quote-part produits indirects ({nb_titres_actifs} titres actifs)",
-                            "Débit": 0,
-                            "Crédit": part_produit,
+                            "Débit": part_produit_debit,
+                            "Crédit": part_produit_credit,
                         })
 
                 if nouvelles_lignes:
