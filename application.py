@@ -1483,6 +1483,155 @@ elif page == "⚙️ Paramétrage analytique":
             st.info("Les charges et produits indirects restent regroupés sur une ligne globale "
                     "(non répartie sur les titres). Vous pourrez revenir sur ce choix à tout moment ci-dessus, "
                     "sans avoir besoin de régénérer le socle.")
+
+        # ================================================
+        # CONTRÔLE DE COUVERTURE DES CHARGES/PRODUITS
+        # ================================================
+        # Contrôle permanent (rejouable à tout moment, sans regénérer le socle) qui répond à
+        # la question « est-ce que TOUT est bien récupéré quelque part ? ». Chaque écriture des
+        # comptes 6xx/7xx doit tomber dans l'une de ces trois catégories : affectée à un vrai
+        # titre, répartie comme indirecte (cf. section répartition ci-dessus), ou orpheline —
+        # auquel cas elle disparaît silencieusement des indicateurs (Tableau de bord, Synthèse
+        # financière) sans qu'aucune erreur ne le signale ailleurs. Complète le Contrôle 2
+        # (import) qui ne s'affiche qu'une fois, au moment de générer le socle : ici on peut
+        # revérifier à tout moment, y compris après avoir changé le mapping ou réimporté un
+        # fichier corrigé.
+        st.markdown("---")
+        st.subheader("🔎 Contrôle de couverture des charges/produits")
+        st.caption(
+            "Vérifie que chaque écriture des comptes configurés est bien récupérée quelque part : "
+            "affectée à un titre réel, répartie comme indirecte, ou orpheline (non affectée nulle "
+            "part, donc absente des indicateurs sans avertissement). Rejouable à tout moment."
+        )
+
+        df_cc = st.session_state["df_pivot"]
+        params_cc = st.session_state.get("param_comptes", {}) or {}
+        label_ci_cc = st.session_state.get("labels_indirect", {}).get("charges", "CHARGES INDIRECTES")
+        label_pi_cc = st.session_state.get("labels_indirect", {}).get("produits", "PRODUITS INDIRECTS")
+        # Familles analytiques mappées AUTRES que la famille de référence (EDITION) — cf.
+        # ⚙️ Paramétrage analytique → Familles analytiques. Une ligne peut être légitimement
+        # vide en Code_Analytique (EDITION) tout en étant taguée dans une autre famille (ex.
+        # COMMUNICATION) : elle n'est alors pas "perdue", simplement hors du périmètre édition
+        # (titres/ISBN) sur lequel portent la fiche titre et le Tableau de bord éditorial. On
+        # la distingue d'une vraie ligne orpheline pour ne pas déclencher une fausse alerte.
+        autres_codes_cols = [c for c in (st.session_state.get("codes_cols") or [])
+                              if c != "Code_Analytique" and c in df_cc.columns]
+        noms_familles_cc = st.session_state.get("noms_familles_actives", [])
+
+        compte_cc = df_cc["Compte"].astype(str)
+        code_cc = (df_cc["Code_Analytique"].astype(str).str.strip()
+                   if "Code_Analytique" in df_cc.columns else pd.Series("", index=df_cc.index))
+        code_upper_cc = code_cc.str.upper()
+        a_autre_famille_cc = pd.Series(False, index=df_cc.index)
+        for c in autres_codes_cols:
+            a_autre_famille_cc = a_autre_famille_cc | (df_cc[c].astype(str).str.strip() != "")
+
+        def _classer_couverture(compte, code_up, autre_famille):
+            if compte in ("CHARGES INDIRECTES REPARTIES", "PRODUITS INDIRECTS REPARTIS"):
+                return "Indirect (réparti sur les titres)"
+            if code_up in (label_ci_cc.upper(), label_pi_cc.upper()):
+                return "Indirect (non encore réparti)"
+            if code_up in ("", "NAN"):
+                if autre_famille:
+                    return "Hors périmètre édition (autre famille analytique)"
+                return "⚠️ Orphelin (non affecté, aucune famille)"
+            return "Titre (affecté)"
+
+        couverture_cc = [
+            _classer_couverture(c, k, a) for c, k, a in zip(compte_cc, code_upper_cc, a_autre_famille_cc)
+        ]
+        df_cc2 = df_cc.copy()
+        df_cc2["_couverture"] = couverture_cc
+
+        prefixes_charges_cc = tuple(params_cc.get("charges") or ["6"])
+        mask_charges_cc = (compte_cc.str.startswith(prefixes_charges_cc)
+                            | (compte_cc == "CHARGES INDIRECTES REPARTIES"))
+        mask_produits_cc = (compte_cc.str.startswith("7")
+                             | (compte_cc == "PRODUITS INDIRECTS REPARTIS"))
+
+        for nom_scope, mask_scope, sens in [("Charges (comptes " + ",".join(prefixes_charges_cc) + ")", mask_charges_cc, 1),
+                                             ("Produits (comptes 7xx)", mask_produits_cc, -1)]:
+            sous = df_cc2[mask_scope]
+            if sous.empty:
+                continue
+            g = sous.groupby("_couverture").apply(
+                lambda x: pd.Series({
+                    "Montant net (€)": sens * (x["Débit"].sum() - x["Crédit"].sum()),
+                    "Nb lignes": len(x),
+                }), include_groups=False
+            )
+            st.markdown(f"**{nom_scope}**")
+            st.dataframe(g.style.format({"Montant net (€)": "{:,.2f}"}))
+            nb_orphelin = sous[sous["_couverture"] == "⚠️ Orphelin (non affecté, aucune famille)"]
+            if not nb_orphelin.empty:
+                montant_orphelin = sens * (nb_orphelin["Débit"].sum() - nb_orphelin["Crédit"].sum())
+                st.error(
+                    f"❌ {len(nb_orphelin)} ligne(s) orpheline(s) détectée(s) ({fmt_fr(round(montant_orphelin, 2), 2)} €) "
+                    f"— ni affectées à un titre, ni taguées « {label_ci_cc if sens == 1 else label_pi_cc} », ni "
+                    f"rattachées à une autre famille analytique mappée. "
+                    f"Ces montants sont invisibles dans le Tableau de bord et la Synthèse financière."
+                )
+                with st.expander(f"Voir le détail des lignes orphelines ({nom_scope})"):
+                    st.dataframe(nb_orphelin[["Compte", "Libellé", "Date", "Débit", "Crédit"]].head(200))
+            else:
+                st.success(f"✅ Aucune ligne orpheline sur {nom_scope.lower()}.")
+            nb_hors_perimetre = sous[sous["_couverture"] == "Hors périmètre édition (autre famille analytique)"]
+            if not nb_hors_perimetre.empty:
+                montant_hp = sens * (nb_hors_perimetre["Débit"].sum() - nb_hors_perimetre["Crédit"].sum())
+                noms_autres = [n for i, n in enumerate(noms_familles_cc) if i > 0] or ["une autre famille"]
+                st.info(
+                    f"ℹ️ {len(nb_hors_perimetre)} ligne(s) ({fmt_fr(round(montant_hp, 2), 2)} €) sans code EDITION "
+                    f"mais taguée(s) dans {', '.join(noms_autres)} — pas une anomalie, mais ces montants sont "
+                    f"comptés dans le CA/charges globaux du Tableau de bord tout en étant hors périmètre "
+                    f"« titres/ISBN » (donc absents de la fiche titre et de calculer_indicateurs_titres)."
+                )
+                with st.expander(f"Voir le détail ({nom_scope})"):
+                    st.dataframe(nb_hors_perimetre[["Compte", "Libellé", "Date", "Débit", "Crédit"]].head(200))
+
+        # --- Couverture par nature (détail des charges), en agrégé sur TOUS les titres ---
+        # Complète la vérification titre par titre (fiche titre) par une vue globale : permet
+        # de repérer immédiatement un compte manquant dans le mapping des natures (ex. un
+        # sous-compte de commission oublié) sans avoir à inspecter chaque titre un par un.
+        detail_charges_cc = params_cc.get("detail_charges")
+        if detail_charges_cc:
+            st.markdown("**Couverture par nature (détail des charges par nature), tous titres confondus**")
+            df_titres_cc = df_cc2[df_cc2["_couverture"] == "Titre (affecté)"]
+            df_charges_titres_cc = df_titres_cc[df_titres_cc["Compte"].astype(str).str.startswith(prefixes_charges_cc)]
+            prefixes_stock_cc = tuple(params_cc.get("stock") or ["603"])
+            df_charges_titres_cc = df_charges_titres_cc[
+                ~df_charges_titres_cc["Compte"].astype(str).str.startswith(prefixes_stock_cc)
+            ]
+            total_charges_titres_cc = (df_charges_titres_cc["Débit"].sum() - df_charges_titres_cc["Crédit"].sum())
+            comptes_couverts_cc = []
+            lignes_nature = []
+            mixte_cc = params_cc.get("contenu_fabrication_mixte") or {}
+            mixte_comptes_cc = tuple(mixte_cc.get("comptes") or [])
+            for nom_nat, prefixes_nat in detail_charges_cc.items():
+                prefixes_eff = (list(prefixes_nat) + list(params_cc.get("provisions_reprises") or [])
+                                 if nom_nat == "Provision pour retour" else list(prefixes_nat))
+                if nom_nat in ("Contenu", "Fabrication") and mixte_comptes_cc:
+                    prefixes_eff = prefixes_eff + list(mixte_comptes_cc)
+                if not prefixes_eff:
+                    continue
+                m = df_charges_titres_cc["Compte"].astype(str).str.startswith(tuple(prefixes_eff))
+                montant_nat = df_charges_titres_cc[m]["Débit"].sum() - df_charges_titres_cc[m]["Crédit"].sum()
+                lignes_nature.append({"Nature": nom_nat, "Montant net (€)": montant_nat, "Nb lignes": int(m.sum())})
+                comptes_couverts_cc.extend(prefixes_eff)
+            reste_cc = (total_charges_titres_cc - sum(l["Montant net (€)"] for l in lignes_nature))
+            lignes_nature.append({
+                "Nature": "Non détaillé (« Autres charges directes »)",
+                "Montant net (€)": reste_cc,
+                "Nb lignes": int((~df_charges_titres_cc["Compte"].astype(str).str.startswith(tuple(comptes_couverts_cc))).sum()) if comptes_couverts_cc else len(df_charges_titres_cc),
+            })
+            df_nat_cc = pd.DataFrame(lignes_nature)
+            st.dataframe(df_nat_cc.style.format({"Montant net (€)": "{:,.2f}"}))
+            if total_charges_titres_cc and abs(reste_cc) / abs(total_charges_titres_cc) > 0.05:
+                st.warning(
+                    f"⚠️ {fmt_fr(round(reste_cc, 2), 2)} € ({abs(reste_cc)/abs(total_charges_titres_cc)*100:.1f}% "
+                    f"des charges affectées aux titres) ne correspondent à aucune nature configurée. "
+                    f"Vérifiez si un compte devrait être ajouté à l'une des natures ci-dessus (cf. ⚙️ "
+                    f"Paramétrage analytique → Détail des charges par nature)."
+                )
 # =====================
 # TABLEAU DE BORD ÉDITORIAL
 # =====================
