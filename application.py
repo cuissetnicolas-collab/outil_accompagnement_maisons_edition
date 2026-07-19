@@ -102,6 +102,15 @@ with st.sidebar:
     ]
     page = st.selectbox("Navigation", pages)
     st.divider()
+    st.session_state["mode_anonyme"] = st.checkbox(
+        "🕶️ Mode démonstration (titres anonymisés)",
+        value=st.session_state.get("mode_anonyme", False),
+        help="Remplace les titres réels par des identifiants anonymes (T1, T2...) dans les "
+             "graphiques et libellés affichés, sans modifier ni les données ni les calculs. "
+             "Utile pour réaliser des captures d'écran ou de la documentation sans exposer "
+             "le catalogue réel du client."
+    )
+    st.divider()
     if st.button("🚪 Déconnexion", use_container_width=True):
         for key in list(st.session_state.keys()):
             del st.session_state[key]
@@ -170,6 +179,31 @@ def normaliser_codes_ean(df, col="Code_Analytique"):
     df.loc[mask_ean, col] = ean_num.map(canonique)
     return df
 
+def obtenir_mapping_anonymisation(df):
+    """Construit (et met en cache en session) un mapping stable code réel -> identifiant
+    anonyme (T1, T2...), basé sur la liste triée des titres actifs. Recalculé uniquement si
+    l'ensemble des titres change, pour que chaque titre garde le même identifiant d'un
+    rafraîchissement à l'autre pendant la session."""
+    titres = sorted(filtrer_isbn_reels(df)["Code_Analytique"].astype(str).unique().tolist())
+    cache = st.session_state.get("anonymisation_cache")
+    if cache and cache.get("titres_source") == titres:
+        return cache["mapping"]
+    mapping = {t: f"T{i+1}" for i, t in enumerate(titres)}
+    st.session_state["anonymisation_cache"] = {"titres_source": titres, "mapping": mapping}
+    return mapping
+
+def label_affiche(code, df_pour_mapping=None):
+    """Retourne le libellé à afficher pour un code analytique : anonymisé (Txxx) si le mode
+    démonstration est actif dans la barre latérale, sinon le code réel tel quel. Ne modifie
+    jamais les données ni les calculs sous-jacents — uniquement l'étiquette affichée à
+    l'écran (graphiques, en-têtes, sélecteurs de titre)."""
+    if not st.session_state.get("mode_anonyme"):
+        return code
+    mapping = st.session_state.get("anonymisation_cache", {}).get("mapping")
+    if mapping is None and df_pour_mapping is not None:
+        mapping = obtenir_mapping_anonymisation(df_pour_mapping)
+    return (mapping or {}).get(code, code)
+
 def _dialog_decorator(title, width="large"):
     """Retourne le décorateur st.dialog si disponible (Streamlit ≥ 1.31), sinon un
     expander déplié en repli pour rester compatible avec une version plus ancienne."""
@@ -220,7 +254,7 @@ def afficher_fiche_titre(isbn_sel, df, params):
     st.markdown(f"""
     <div style='padding:14px 18px; border-radius:12px; background:{bg}; color:{fg};
                 font-weight:600; font-size:16px; margin-bottom:14px'>
-        {isbn_sel} — {signal}
+        {label_affiche(isbn_sel, df)} — {signal}
     </div>
     """, unsafe_allow_html=True)
 
@@ -238,26 +272,43 @@ def afficher_fiche_titre(isbn_sel, df, params):
     # structure/gérant, dotations, contenu, fabrication) si configuré dans ⚙️ Paramétrage
     # analytique (section "Détail des charges par nature") ; sinon, on garde la ligne agrégée
     # "Charges variables" comme auparavant.
+    # detail_par_poste : associe à chaque poste du mini SIG les écritures du grand livre qui
+    # le composent, pour permettre le drill-down juste en dessous du graphique (section
+    # "🔍 Détail des écritures par poste").
+    detail_par_poste = {"Ventes HT": df_v, "Retours": df_r, "Remises": df_rem}
+
     detail_charges = params.get("detail_charges")
     if detail_charges:
         charge_rows = []
         total_detail = 0.0
+        comptes_detailles = []
         for nom, prefixes in detail_charges.items():
             if prefixes:
                 df_nat = df_t[df_t["Compte"].astype(str).str.startswith(tuple(prefixes))]
                 val = df_nat["Débit"].sum() - df_nat["Crédit"].sum()
+                comptes_detailles.extend(prefixes)
             else:
+                df_nat = df_t.iloc[0:0]
                 val = 0.0
             charge_rows.append((f"− {nom}", -val, "deduction"))
+            detail_par_poste[f"− {nom}"] = df_nat
             total_detail += val
         # Écart entre la somme des natures détaillées et le total réel des charges variables
         # (comptes non couverts par les 7 natures ci-dessus) : affiché explicitement pour ne
         # jamais rompre la réconciliation avec la marge brute.
         reste = charges_v - total_detail
         if abs(reste) > 0.5:
-            charge_rows.append(("− Autres charges directes (non détaillées)", -reste, "deduction"))
+            label_reste = "− Autres charges directes (non détaillées)"
+            charge_rows.append((label_reste, -reste, "deduction"))
+            df_reste = (df_c[~df_c["Compte"].astype(str).str.startswith(tuple(comptes_detailles))]
+                        if comptes_detailles else df_c)
+            detail_par_poste[label_reste] = df_reste
     else:
         charge_rows = [("− Charges variables", -charges_v, "deduction")]
+        detail_par_poste["− Charges variables"] = df_c
+
+    if charges_fixes:
+        detail_par_poste["− Charges fixes imputées"] = df_cfi
 
     rows_sig = (
         [
@@ -317,6 +368,24 @@ def afficher_fiche_titre(isbn_sel, df, params):
     fig_sig.update_layout(height=340 if detail_charges else 300, margin=dict(t=10), yaxis_title="€",
                            separators=", ", xaxis_tickangle=-25 if detail_charges else 0)
     st.plotly_chart(fig_sig, use_container_width=True)
+
+    # ── Détail des écritures par poste (drill-down) ──
+    # Permet de retrouver, pour un poste du mini SIG choisi ci-dessus (Ventes, Retours,
+    # chaque nature de charge...), les écritures analytiques individuelles qui le composent,
+    # sans avoir à ressortir le grand livre complet.
+    postes_dispo = [k for k, v in detail_par_poste.items() if not v.empty]
+    if postes_dispo:
+        st.markdown("#### 🔍 Détail des écritures par poste")
+        poste_sel = st.selectbox(
+            "Choisir un poste pour afficher les écritures analytiques correspondantes",
+            postes_dispo, key=f"poste_sel_{isbn_sel}"
+        )
+        cols_detail = [c for c in ["Date", "Compte", "Libellé", "Débit", "Crédit"] if c in detail_par_poste[poste_sel].columns]
+        df_detail_poste = detail_par_poste[poste_sel][cols_detail].sort_values("Date") if "Date" in cols_detail else detail_par_poste[poste_sel][cols_detail]
+        formats_detail = {c: (lambda x: f"{fmt_fr(x, 2)} €") for c in ["Débit", "Crédit"] if c in cols_detail}
+        st.dataframe(df_detail_poste.style.format(formats_detail), use_container_width=True, hide_index=True)
+        st.caption(f"{len(df_detail_poste)} écriture(s) — somme Débit − Crédit : "
+                   f"{fmt_fr(detail_par_poste[poste_sel]['Débit'].sum() - detail_par_poste[poste_sel]['Crédit'].sum(), 2)} €")
 
     df_t_evol = df_t.copy()
     df_t_evol["Mois"] = pd.to_datetime(df_t_evol["Date"], errors="coerce").dt.to_period("M").astype(str)
@@ -515,7 +584,6 @@ def load_demo_data():
     df = pd.DataFrame(rows)
     df["Date"] = pd.to_datetime(df["Date"])
     return df
-
 # =====================
 # ACCUEIL
 # =====================
@@ -655,27 +723,95 @@ elif page == "⚙️ Paramétrage analytique":
     st.info("Associez les colonnes de votre fichier aux champs attendus, puis configurez vos comptes comptables.")
 
     columns = list(df.columns)
+
+    # ── Recharger une configuration déjà enregistrée ──
+    with st.expander("📥 Recharger une configuration déjà enregistrée", expanded=False):
+        st.caption(
+            "Réimportez le fichier JSON obtenu via « 💾 Sauvegarder la configuration » lors d'un précédent "
+            "passage, pour pré-remplir automatiquement tout le mapping ci-dessous (colonnes, comptes, détail "
+            "des charges par nature, familles analytiques, libellés indirects) — sans tout re-saisir à chaque "
+            "import. Fonctionne si votre nouvel export utilise les mêmes noms de colonnes que celui d'origine."
+        )
+        fichier_config = st.file_uploader("Fichier de configuration (JSON)", type=["json"], key="uploader_config")
+        if fichier_config is not None and st.button("📤 Appliquer cette configuration", key="btn_appliquer_config"):
+            try:
+                cfg = json.load(fichier_config)
+                cfg_mapping = cfg.get("mapping", {})
+                cfg_inv = {v: k for k, v in cfg_mapping.items()}
+                cfg_params = cfg.get("param_comptes", {})
+                cfg_detail = cfg_params.get("detail_charges") or {}
+                cfg_labels = cfg.get("labels_indirect", {})
+                cfg_familles_cols = cfg.get("familles_cols", [])
+                cfg_codes_cols = cfg.get("codes_cols", [])
+                cfg_noms_familles = cfg.get("noms_familles_actives", [])
+
+                if cfg_inv.get("Compte") in columns:
+                    st.session_state["map_compte_col"] = cfg_inv["Compte"]
+                if cfg_inv.get("Débit") in columns:
+                    st.session_state["map_debit_col"] = cfg_inv["Débit"]
+                if cfg_inv.get("Crédit") in columns:
+                    st.session_state["map_credit_col"] = cfg_inv["Crédit"]
+                if cfg_inv.get("Date") in columns:
+                    st.session_state["map_date_col"] = cfg_inv["Date"]
+                if cfg_inv.get("Libellé", "") in ([""] + columns):
+                    st.session_state["map_libelle_col"] = cfg_inv.get("Libellé", "")
+                if cfg_inv.get("Journal", "") in ([""] + columns):
+                    st.session_state["map_journal_col"] = cfg_inv.get("Journal", "")
+
+                st.session_state["map_ventes_comptes"] = ",".join(cfg_params.get("ventes", ["701"]))
+                st.session_state["map_retours_comptes"] = ",".join(cfg_params.get("retours", ["709"]))
+                st.session_state["map_remises_comptes"] = ",".join(cfg_params.get("remises", ["7091"]))
+                st.session_state["map_charges_comptes"] = ",".join(cfg_params.get("charges", ["6"]))
+                st.session_state["map_charges_imputees"] = cfg_params.get("charges_imputees", "Oui")
+
+                st.session_state["cpt_variation_stock"] = ",".join(cfg_detail.get("Variation de stock", []))
+                st.session_state["cpt_droits_auteur_detail"] = ",".join(cfg_detail.get("Droits d'auteur", []))
+                st.session_state["cpt_commercialisation"] = ",".join(cfg_detail.get("Commercialisation", []))
+                st.session_state["cpt_structure"] = ",".join(cfg_detail.get("Structure/gérant", []))
+                st.session_state["cpt_dotations"] = ",".join(cfg_detail.get("Dotations amort.", []))
+                st.session_state["cpt_contenu"] = ",".join(cfg_detail.get("Contenu", []))
+                st.session_state["cpt_fabrication"] = ",".join(cfg_detail.get("Fabrication", []))
+
+                nb_fam = len(cfg_noms_familles) if cfg_noms_familles else 1
+                st.session_state["map_nb_familles"] = nb_fam
+                for i in range(nb_fam):
+                    st.session_state[f"nom_famille_{i}"] = cfg_noms_familles[i] if i < len(cfg_noms_familles) else ""
+                    _fc = cfg_inv.get(cfg_familles_cols[i]) if i < len(cfg_familles_cols) else None
+                    _cc = cfg_inv.get(cfg_codes_cols[i]) if i < len(cfg_codes_cols) else None
+                    if _fc in ([""] + columns):
+                        st.session_state[f"famille_col_{i}"] = _fc or ""
+                    if _cc in ([""] + columns):
+                        st.session_state[f"code_col_{i}"] = _cc or ""
+
+                st.session_state["map_label_ci"] = cfg_labels.get("charges", "CHARGES INDIRECTES")
+                st.session_state["map_label_pi"] = cfg_labels.get("produits", "PRODUITS INDIRECTS")
+
+                st.success("✅ Configuration chargée — les champs ci-dessous sont pré-remplis.")
+                st.rerun()
+            except Exception as e:
+                st.error(f"❌ Fichier de configuration invalide : {e}")
+
     col1, col2 = st.columns(2)
     with col1:
         st.subheader("Mapping des colonnes de base")
-        compte_col  = st.selectbox("Colonne Compte", columns)
-        debit_col   = st.selectbox("Colonne Débit", columns)
-        credit_col  = st.selectbox("Colonne Crédit", columns)
-        date_col    = st.selectbox("Colonne Date", columns)
-        libelle_col = st.selectbox("Libellé (optionnel)", [""] + columns)
+        compte_col  = st.selectbox("Colonne Compte", columns, key="map_compte_col")
+        debit_col   = st.selectbox("Colonne Débit", columns, key="map_debit_col")
+        credit_col  = st.selectbox("Colonne Crédit", columns, key="map_credit_col")
+        date_col    = st.selectbox("Colonne Date", columns, key="map_date_col")
+        libelle_col = st.selectbox("Libellé (optionnel)", [""] + columns, key="map_libelle_col")
         journal_col = st.selectbox(
-            "Code journal (optionnel)", [""] + columns,
+            "Code journal (optionnel)", [""] + columns, key="map_journal_col",
             help="Recommandé pour le module Trésorerie : permet d'exclure les écritures de report "
                  "à nouveau (reprise des soldes d'ouverture, souvent codées « AN ») des flux de "
                  "trésorerie reconstitués, afin de ne pas les compter comme des mouvements de la période."
         )
     with col2:
         st.subheader("Comptes comptables")
-        ventes_comptes  = st.text_input("Comptes ventes", value="701")
-        retours_comptes = st.text_input("Comptes retours", value="709")
-        remises_comptes = st.text_input("Comptes remises", value="7091")
-        charges_comptes = st.text_input("Comptes charges", value="6")
-        charges_imputees = st.radio("Charges déjà imputées par section ?", ["Oui", "Non"])
+        ventes_comptes  = st.text_input("Comptes ventes", value="701", key="map_ventes_comptes")
+        retours_comptes = st.text_input("Comptes retours", value="709", key="map_retours_comptes")
+        remises_comptes = st.text_input("Comptes remises", value="7091", key="map_remises_comptes")
+        charges_comptes = st.text_input("Comptes charges", value="6", key="map_charges_comptes")
+        charges_imputees = st.radio("Charges déjà imputées par section ?", ["Oui", "Non"], key="map_charges_imputees")
 
     with st.expander("📐 Détail des charges par nature (optionnel — mini SIG détaillé par titre)"):
         st.caption(
@@ -730,7 +866,7 @@ elif page == "⚙️ Paramétrage analytique":
       de faux positifs au contrôle de cohérence.
     """)
 
-    nb_familles = st.number_input("Nombre de familles analytiques à mapper", min_value=1, max_value=4, value=1, step=1)
+    nb_familles = st.number_input("Nombre de familles analytiques à mapper", min_value=1, max_value=4, value=1, step=1, key="map_nb_familles")
     familles_mapping = []
     noms_suggestion = ["EDITION", "COMMUNICATION", "Types de dépenses / revenus", "AUTEUR"]
     for i in range(int(nb_familles)):
@@ -752,8 +888,8 @@ elif page == "⚙️ Paramétrage analytique":
 
     st.subheader("Libellés des lignes indirectes")
     col_li1, col_li2 = st.columns(2)
-    label_charges_indirectes = col_li1.text_input("Libellé des charges indirectes", value="CHARGES INDIRECTES")
-    label_produits_indirects = col_li2.text_input("Libellé des produits indirects", value="PRODUITS INDIRECTS")
+    label_charges_indirectes = col_li1.text_input("Libellé des charges indirectes", value="CHARGES INDIRECTES", key="map_label_ci")
+    label_produits_indirects = col_li2.text_input("Libellé des produits indirects", value="PRODUITS INDIRECTS", key="map_label_pi")
 
     # Aperçu avant validation
     st.subheader("Aperçu du mapping")
@@ -915,8 +1051,12 @@ elif page == "⚙️ Paramétrage analytique":
             "familles_cols": familles_cols,
             "codes_cols": codes_cols,
             "noms_familles_actives": noms_familles_actives,
+            "labels_indirect": st.session_state["labels_indirect"],
         }
         st.success("✅ Socle analytique généré avec succès !")
+        st.caption("💡 Conservez ce fichier de configuration : vous pourrez le réimporter la prochaine fois "
+                   "via « 📥 Recharger une configuration déjà enregistrée » ci-dessus, pour éviter de "
+                   "refaire tout le mapping.")
         st.download_button(
             "💾 Sauvegarder la configuration (JSON)",
             data=json.dumps(config, ensure_ascii=False, indent=2),
@@ -1166,10 +1306,13 @@ elif page == "📈 Tableau de bord éditorial":
     df_isbn_tb = filtrer_isbn_reels(df)
     top = df_isbn_tb.groupby("Code_Analytique", as_index=False).agg({"Crédit": "sum", "Débit": "sum"})
     top["Résultat"] = top["Crédit"] - top["Débit"]
-    top10 = top.nlargest(10, "Résultat")
-    fig3 = px.bar(top10, x="Code_Analytique", y="Résultat", text="Résultat",
+    top10 = top.nlargest(10, "Résultat").copy()
+    # Libellé affiché (anonymisé si le mode démonstration est actif) : distinct du
+    # Code_Analytique réel utilisé pour tous les calculs, qui n'est jamais modifié.
+    top10["Titre_affiche"] = top10["Code_Analytique"].apply(lambda c: label_affiche(c, df))
+    fig3 = px.bar(top10, x="Titre_affiche", y="Résultat", text="Résultat",
                    color="Résultat", color_continuous_scale=["#EF4444", "#F59E0B", "#10B981"],
-                   labels={"Code_Analytique": "ISBN / Titre", "Résultat": "Résultat net (€)"}, height=380)
+                   labels={"Titre_affiche": "ISBN / Titre", "Résultat": "Résultat net (€)"}, height=380)
     fig3.update_traces(texttemplate="%{text:,.0f}", textposition="outside")
     fig3.update_layout(separators=", ")  # format FR : virgule decimale, espace milliers
     fig3.update_layout(showlegend=False, margin=dict(t=20))
@@ -1212,7 +1355,7 @@ elif page == "📖 Analyse par titre":
             return
         for _, row in df_tri.iterrows():
             c1, c2 = container.columns([3, 1])
-            c1.markdown(f"{row['Signal']} **{row['Code_Analytique']}** — {fmt_fr(row[colonne_montant], 0)} €")
+            c1.markdown(f"{row['Signal']} **{label_affiche(row['Code_Analytique'], df)}** — {fmt_fr(row[colonne_montant], 0)} €")
             if c2.button("Voir", key=f"{prefix_key}_{row['Code_Analytique']}", use_container_width=True):
                 afficher_fiche_titre(row["Code_Analytique"], df, params)
 
@@ -1276,13 +1419,13 @@ elif page == "📖 Analyse par titre":
                 "fixes imputées incluses) et son évolution mensuelle.")
     col_sel, col_btn = st.columns([3, 1])
     with col_sel:
-        isbn_sel = st.selectbox("Titre (ISBN)", titres, label_visibility="collapsed")
+        isbn_sel = st.selectbox("Titre (ISBN)", titres, label_visibility="collapsed",
+                                 format_func=lambda c: label_affiche(c, df))
     with col_btn:
         ouvrir = st.button("📖 Ouvrir la fiche", type="primary", use_container_width=True)
 
     if ouvrir:
         afficher_fiche_titre(isbn_sel, df, params)
-
 # =====================
 # TRÉSORERIE PRÉVISIONNELLE
 # =====================
@@ -1614,7 +1757,6 @@ elif page == "💰 Trésorerie prévisionnelle":
             st.markdown("**Cumul de trésorerie sur 6 mois** _(scénario central)_")
             cumul_6m = treso_real.iloc[-1] + scenarios["Central"].sum().iloc[:6].cumsum()
             st.line_chart(cumul_6m)
-
 # =====================
 # DROITS D'AUTEURS
 # =====================
@@ -2536,7 +2678,6 @@ elif page == "📦 Retours & Remises":
                         use_container_width=True)
             st.caption("Le nombre d'exemplaires retournés/vendus est estimé en divisant les montants € par le "
                       "PPHT saisi ci-dessus (la comptabilité ne porte que des montants, pas des quantités).")
-
 # =====================
 # SYNTHÈSE FINANCIÈRE
 # =====================
