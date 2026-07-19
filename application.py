@@ -186,14 +186,26 @@ def mask_remises(df_scope, params):
 COMPTE_CHARGES_INDIRECTES_REPARTIES = "CHARGES INDIRECTES REPARTIES"
 COMPTE_PRODUITS_INDIRECTS_REPARTIS = "PRODUITS INDIRECTS REPARTIS"
 
+def mask_provisions_reprises(df_scope, params):
+    """Reprises sur provisions (ex. 781/7810 = reprise de provision pour retour), configurées
+    séparément (params["provisions_reprises"]) : à la demande du client, ces montants ne sont
+    PAS traités comme du CA/produit — ils sont nettés directement contre les charges (en
+    contrepartie de la dotation initiale, cf. la nature "Provision pour retour" du détail des
+    charges) plutôt que de gonfler artificiellement le chiffre d'affaires."""
+    prefixes = tuple(params.get("provisions_reprises") or [])
+    if not prefixes:
+        return pd.Series(False, index=df_scope.index)
+    return df_scope["Compte"].astype(str).str.startswith(prefixes)
+
 def mask_ventes(df_scope, params):
     """Lignes de ventes/produits : comptes configurés (params["ventes"]), la quote-part de
     produits indirects répartis sur les titres actifs si la répartition a été activée (cf.
     COMPTE_PRODUITS_INDIRECTS_REPARTIS ci-dessus), et — à la demande du client, pour ne pas
     introduire une catégorie "autres produits" distincte — tout autre produit comptabilisé
-    sur un compte 7xx qui n'est ni un retour ni une remise : commissions libraires (706),
-    produits divers de gestion courante (708/758), variation de stock de produits finis
-    (7134), subventions (740), reprises sur provisions (781), produits financiers (768)...
+    sur un compte 7xx qui n'est ni un retour, ni une remise, ni une reprise sur provisions
+    (cf. mask_provisions_reprises, nettée contre les charges plutôt que comptée en CA) :
+    commissions libraires (706), produits divers de gestion courante (708/758), variation de
+    stock de produits finis (7134), subventions (740), produits financiers (768)...
 
     Ces montants sont bien réels (près de 67 k€ sur le grand livre du cas d'étude, dont
     seulement ~8,8 k€ tagués "PRODUITS INDIRECTS" et donc déjà répartis) : sans les inclure
@@ -207,7 +219,8 @@ def mask_ventes(df_scope, params):
                         if prefixes_ventes else pd.Series(False, index=df_scope.index))
     mask_repartis = df_scope["Compte"].astype(str) == COMPTE_PRODUITS_INDIRECTS_REPARTIS
     is_7 = df_scope["Compte"].astype(str).str.startswith("7")
-    mask_autres_7xx = is_7 & (~mask_retours(df_scope, params)) & (~mask_remises(df_scope, params))
+    mask_autres_7xx = (is_7 & (~mask_retours(df_scope, params)) & (~mask_remises(df_scope, params))
+                        & (~mask_provisions_reprises(df_scope, params)))
     return mask_configuree | mask_repartis | mask_autres_7xx
 
 def mask_charges(df_scope, params):
@@ -320,7 +333,11 @@ def afficher_fiche_titre(isbn_sel, df, params):
     variation_stock = df_stock["Débit"].sum() - df_stock["Crédit"].sum()
     marge_brute   = ca_net - charges_v
     charges_fixes = df_cfi["Débit"].sum()
-    resultat_net  = marge_brute - charges_fixes
+    # La variation de stock reste isolée de la marge brute (cf. anomalie "Les Couleurs de
+    # l'Exil" ci-dessus), mais est désormais incluse dans le résultat net du titre — à la
+    # demande du client — comme une ligne de charge/produit à part entière entre marge brute
+    # et charges fixes imputées, plutôt que purement informative.
+    resultat_net  = marge_brute - variation_stock - charges_fixes
     ventes_distrib_t = df_v_distrib_t["Crédit"].sum()
     taux_ret      = (retours_m / ventes_distrib_t * 100) if ventes_distrib_t else 0
     taux_rem      = (remises_m / ventes_distrib_t * 100) if ventes_distrib_t else 0
@@ -351,12 +368,14 @@ def afficher_fiche_titre(isbn_sel, df, params):
         if variation_stock < 0:
             st.caption(f"ℹ️ Stock de ce titre en hausse sur la période (crédit net de "
                        f"{fmt_fr(-variation_stock, 0)} € sur le compte de variation de stock) — montant "
-                       "**non inclus** dans la marge brute et le résultat net ci-dessus : le coût des "
-                       "invendus est différé, pas absent.")
+                       "**non inclus dans la marge brute** (qui resterait sinon artificiellement gonflée/"
+                       "dégonflée par un simple mouvement de stock), mais **inclus dans le résultat net** "
+                       "ci-dessus, comme une ligne à part entière.")
         else:
             st.caption(f"ℹ️ Stock de ce titre en baisse sur la période (débit net de "
                        f"{fmt_fr(variation_stock, 0)} € sur le compte de variation de stock) — montant "
-                       "**non inclus** dans la marge brute et le résultat net ci-dessus.")
+                       "**non inclus dans la marge brute**, mais **inclus dans le résultat net** ci-dessus, "
+                       "comme une ligne à part entière.")
 
     st.markdown("#### Mini SIG — Soldes intermédiaires de gestion")
     # Détail des charges par nature (variation de stock, droits d'auteur, commercialisation,
@@ -406,6 +425,8 @@ def afficher_fiche_titre(isbn_sel, df, params):
         charge_rows = [("− Charges variables", -charges_v, "deduction")]
         detail_par_poste["− Charges variables"] = df_c
 
+    if abs(variation_stock) > 0.5:
+        detail_par_poste["− Variation de stock"] = df_stock
     if charges_fixes:
         detail_par_poste["− Charges fixes imputées"] = df_cfi
 
@@ -419,6 +440,9 @@ def afficher_fiche_titre(isbn_sel, df, params):
         + charge_rows
         + [
             ("= Marge brute",              marge_brute,    "subtotal"),
+        ]
+        + ([("− Variation de stock", -variation_stock, "deduction")] if abs(variation_stock) > 0.5 else [])
+        + [
             ("− Charges fixes imputées",   -charges_fixes, "deduction"),
             ("= Résultat net du titre",    resultat_net,   "total"),
         ]
@@ -445,14 +469,11 @@ def afficher_fiche_titre(isbn_sel, df, params):
     </table>
     """, unsafe_allow_html=True)
 
-    # Mesures du waterfall : Ventes HT (absolu), Retours/Remises (relatif), CA net (total),
-    # N lignes de charges (relatif, N variable selon que le détail par nature est actif),
-    # Marge brute (total), Charges fixes imputées (relatif), Résultat net (total).
-    measures = (
-        ["absolute", "relative", "relative", "total"]
-        + ["relative"] * len(charge_rows)
-        + ["total", "relative", "total"]
-    )
+    # Mesures du waterfall dérivées directement du style de chaque ligne de rows_sig (plutôt
+    # que d'un décompte manuel, fragile dès que le nombre de lignes varie — détail des charges
+    # par nature actif ou non, ligne "Variation de stock" présente ou non).
+    _style_vers_mesure = {"base": "absolute", "deduction": "relative", "subtotal": "total", "total": "total"}
+    measures = [_style_vers_mesure[r[2]] for r in rows_sig]
     fig_sig = go.Figure(go.Waterfall(
         orientation="v",
         measure=measures,
@@ -581,9 +602,9 @@ def calculer_indicateurs_titres(df, params, titres):
     res["CA net"]      = res["Ventes HT"] - res["Retours"] - res["Remises"]
     res["Charges variables"] = charges.values
     res["Marge brute"] = res["CA net"] - res["Charges variables"]
-    res["Variation de stock (info, hors marge)"] = variation_stock.values
+    res["Variation de stock (incluse au résultat, hors marge)"] = variation_stock.values
     res["Charges fixes imputées"] = charges_fixes.values
-    res["Résultat net"] = res["Marge brute"] - res["Charges fixes imputées"]
+    res["Résultat net"] = res["Marge brute"] - res["Variation de stock (incluse au résultat, hors marge)"] - res["Charges fixes imputées"]
     res["Taux retour (%)"] = np.where(ventes_distrib.values != 0, res["Retours"] / ventes_distrib.values * 100, 0)
 
     def _signal(row):
@@ -810,7 +831,7 @@ elif page == "📂 Import des données":
             st.session_state["df_pivot_brut"] = pivot.copy()
             st.session_state["param_comptes"] = {
                 "ventes": ["701"], "ventes_distributeur": ["701"], "retours": ["709"],
-                "remises": ["7091"], "charges": ["6"],
+                "remises": ["7091"], "charges": ["6"], "provisions_reprises": ["781"],
                 "charges_imputees": "Oui"
             }
             # Clés nécessaires au module Paramétrage (contrôles + répartition) pour rester
@@ -879,13 +900,14 @@ elif page == "⚙️ Paramétrage analytique":
                 st.session_state["map_retours_comptes"] = ",".join(cfg_params.get("retours", ["709"]))
                 st.session_state["map_remises_comptes"] = ",".join(cfg_params.get("remises", ["7091"]))
                 st.session_state["map_charges_comptes"] = ",".join(cfg_params.get("charges", ["6"]))
+                st.session_state["map_provisions_reprises_comptes"] = ",".join(cfg_params.get("provisions_reprises", ["781"]))
                 st.session_state["map_charges_imputees"] = cfg_params.get("charges_imputees", "Oui")
 
                 st.session_state["cpt_variation_stock"] = ",".join(cfg_detail.get("Variation de stock", []))
                 st.session_state["cpt_droits_auteur_detail"] = ",".join(cfg_detail.get("Droits d'auteur", []))
                 st.session_state["cpt_commercialisation"] = ",".join(cfg_detail.get("Commercialisation", []))
                 st.session_state["cpt_structure"] = ",".join(cfg_detail.get("Structure/gérant", []))
-                st.session_state["cpt_dotations"] = ",".join(cfg_detail.get("Dotations amort.", []))
+                st.session_state["cpt_dotations"] = ",".join(cfg_detail.get("Provision pour retour", cfg_detail.get("Dotations amort.", [])))
                 st.session_state["cpt_contenu"] = ",".join(cfg_detail.get("Contenu", []))
                 st.session_state["cpt_fabrication"] = ",".join(cfg_detail.get("Fabrication", []))
 
@@ -941,13 +963,20 @@ elif page == "⚙️ Paramétrage analytique":
         retours_comptes = st.text_input("Comptes retours", value="709", key="map_retours_comptes")
         remises_comptes = st.text_input("Comptes remises", value="7091", key="map_remises_comptes")
         charges_comptes = st.text_input("Comptes charges", value="6", key="map_charges_comptes")
+        provisions_reprises_comptes = st.text_input(
+            "Comptes reprises sur provisions (ex. retour)", value="781", key="map_provisions_reprises_comptes",
+            help="Reprises sur provisions (ex. 7810 = reprise de provision pour retour), en contrepartie d'une "
+                 "dotation antérieure (cf. « Provision pour retour » dans le détail des charges ci-dessous). "
+                 "Ces comptes ne sont PAS comptés en CA/produits : ils sont nettés directement contre les "
+                 "charges, pour imputer la reprise à la provision initiale plutôt que de gonfler le CA."
+        )
         charges_imputees = st.radio("Charges déjà imputées par section ?", ["Oui", "Non"], key="map_charges_imputees")
 
     with st.expander("📐 Détail des charges par nature (optionnel — mini SIG détaillé par titre)"):
         st.caption(
             "Renseignez ici les comptes correspondant à chaque nature de charge directe, conformément "
             "à la décomposition retenue pour le pilotage par titre (variation de stock, droits d'auteur, "
-            "commercialisation, structure/gérant, dotations aux amortissements, contenu, fabrication). "
+            "commercialisation, structure/gérant, provision pour retour, contenu, fabrication). "
             "Si cette section reste vide, la fiche titre (module **📖 Analyse par titre**) continue "
             "d'afficher une seule ligne agrégée « Charges variables », comme aujourd'hui. Dès qu'au moins "
             "une nature est renseignée, la fiche titre affiche un compte de résultat en cascade détaillé "
@@ -964,8 +993,11 @@ elif page == "⚙️ Paramétrage analytique":
             cpt_structure        = st.text_input("Structure / gérant", value="", key="cpt_structure",
                                                   help="Ex. 6411,6451,6453")
         with col_d2:
-            cpt_dotations = st.text_input("Dotations aux amortissements", value="", key="cpt_dotations",
-                                           help="Ex. 681")
+            cpt_dotations = st.text_input("Provision pour retour (dotation)", value="", key="cpt_dotations",
+                                           help="Ex. 6810 — dotation aux provisions pour retour. La reprise "
+                                                "correspondante (ex. 781/7810) est configurée séparément "
+                                                "ci-dessus (« Comptes reprises sur provisions ») et nettée "
+                                                "automatiquement contre les charges plutôt que comptée en CA.")
             cpt_contenu   = st.text_input("Contenu (préparation éditoriale, prépresse)", value="", key="cpt_contenu",
                                            help="Ex. 604000000")
             cpt_fabrication = st.text_input("Fabrication (impression, façonnage)", value="", key="cpt_fabrication",
@@ -1157,7 +1189,7 @@ elif page == "⚙️ Paramétrage analytique":
             "Droits d'auteur":     _split_comptes(cpt_droits_auteur),
             "Commercialisation":   _split_comptes(cpt_commercialisation),
             "Structure/gérant":    _split_comptes(cpt_structure),
-            "Dotations amort.":    _split_comptes(cpt_dotations),
+            "Provision pour retour": _split_comptes(cpt_dotations),
             "Contenu":             _split_comptes(cpt_contenu),
             "Fabrication":         _split_comptes(cpt_fabrication),
         }
@@ -1171,6 +1203,7 @@ elif page == "⚙️ Paramétrage analytique":
             "retours": [c.strip() for c in retours_comptes.split(",")],
             "remises": [c.strip() for c in remises_comptes.split(",")],
             "charges": [c.strip() for c in charges_comptes.split(",")],
+            "provisions_reprises": [c.strip() for c in provisions_reprises_comptes.split(",") if c.strip()],
             "charges_imputees": charges_imputees,
             "detail_charges": detail_charges if detail_charges_actif else None,
         }
@@ -1412,8 +1445,14 @@ elif page == "📈 Tableau de bord éditorial":
     total_retours = df_r["Débit"].sum() - df_r["Crédit"].sum()
     total_remises = df_rem["Débit"].sum() - df_rem["Crédit"].sum()
     ca_net        = ca_brut - total_retours - total_remises - corrections_ventes
+    # Reprises sur provisions (ex. 781/7810 = reprise de provision pour retour) : exclues du CA
+    # par mask_ventes ci-dessus (cf. mask_provisions_reprises), nettées ici directement contre
+    # les charges — la reprise vient réduire la charge nette, en contrepartie de la dotation
+    # initiale (ex. 6810), plutôt que de gonfler le chiffre d'affaires.
+    df_prov_reprises = df[mask_provisions_reprises(df, params)]
+    net_provisions_reprises = df_prov_reprises["Crédit"].sum() - df_prov_reprises["Débit"].sum()
     # Net débit-crédit : idem module Analyse par titre (comptes 603/713 à double sens).
-    charges_tot   = df_c["Débit"].sum() - df_c["Crédit"].sum()
+    charges_tot   = (df_c["Débit"].sum() - df_c["Crédit"].sum()) - net_provisions_reprises
     resultat      = ca_net - charges_tot
     taux_retour   = (total_retours / ca_brut_distrib * 100) if ca_brut_distrib else 0
     taux_remise   = (total_remises / ca_brut_distrib * 100) if ca_brut_distrib else 0
@@ -1439,6 +1478,10 @@ elif page == "📈 Tableau de bord éditorial":
                f"autres sous-comptes de ventes et hors commissions/subventions/produits divers) : "
                f"**{fmt_fr(ca_brut_distrib, 0)} €**. Taux de remise : **{taux_remise:.1f} %**.")
     k4.metric("Charges totales", f"{fmt_fr(charges_tot, 0)} €")
+    if net_provisions_reprises:
+        st.caption(f"ℹ️ Charges totales déjà nettes de {fmt_fr(net_provisions_reprises, 0)} € de reprises sur "
+                   "provisions (ex. reprise de provision pour retour) — imputées à la dotation initiale plutôt "
+                   "que comptées en CA.")
     k5.metric("Résultat net", f"{fmt_fr(resultat, 0)} €",
               delta_color="normal" if resultat >= 0 else "inverse")
 
@@ -2938,8 +2981,12 @@ elif page == "📊 Synthèse financière":
     total_retours = abs(df_r["Montant_net"].sum())  if not df_r.empty else 0
     total_remises = abs(df_rem["Montant_net"].sum()) if not df_rem.empty else 0
     ca_net        = ca_brut - total_retours - total_remises - corrections_ventes
+    # Reprises sur provisions (ex. 781/7810) : exclues du CA par mask_ventes (cf.
+    # mask_provisions_reprises), nettées ici contre les charges — cf. Tableau de bord éditorial.
+    df_prov_reprises = df[mask_provisions_reprises(df, params)]
+    net_provisions_reprises = df_prov_reprises["Crédit"].sum() - df_prov_reprises["Débit"].sum()
     # Net débit-crédit (Montant_net déjà calculé par filtre_m ci-dessus).
-    charges_tot     = df_c["Montant_net"].sum() if not df_c.empty else 0
+    charges_tot     = (df_c["Montant_net"].sum() if not df_c.empty else 0) - net_provisions_reprises
     resultat_net  = ca_net - charges_tot
     marge_pct     = (resultat_net / ca_brut * 100) if ca_brut else 0
 
@@ -2952,9 +2999,12 @@ elif page == "📊 Synthèse financière":
             f"{fmt_fr(extournes_ventes, 0)} € d'extournes/corrections sur ventes proprement dites "
             f"(compte{'s' if len(params['ventes']) > 1 else ''} {', '.join(params['ventes'])}) + "
             f"{fmt_fr(autres_regul_produits, 0)} € d'autres régularisations (débits) sur les autres "
-            "comptes de produits inclus dans le CA élargi (commissions, subventions, produits divers, "
-            "reprises...)."
+            "comptes de produits inclus dans le CA élargi (commissions, subventions, produits divers)."
         )
+    if net_provisions_reprises:
+        st.caption(f"ℹ️ Charges déjà nettes de {fmt_fr(net_provisions_reprises, 0)} € de reprises sur "
+                   "provisions (ex. reprise de provision pour retour) — imputées à la dotation initiale "
+                   "plutôt que comptées en CA.")
 
     # ================================================
     # 🚦 INDICATEURS CLÉS DE PILOTAGE (référentiel de la mission)
