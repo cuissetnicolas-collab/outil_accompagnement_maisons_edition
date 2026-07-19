@@ -187,13 +187,28 @@ COMPTE_CHARGES_INDIRECTES_REPARTIES = "CHARGES INDIRECTES REPARTIES"
 COMPTE_PRODUITS_INDIRECTS_REPARTIS = "PRODUITS INDIRECTS REPARTIS"
 
 def mask_ventes(df_scope, params):
-    """Lignes de ventes/produits : comptes configurés (params["ventes"]), plus la
-    quote-part de produits indirects répartis sur les titres actifs si la répartition a
-    été activée (cf. COMPTE_PRODUITS_INDIRECTS_REPARTIS ci-dessus)."""
+    """Lignes de ventes/produits : comptes configurés (params["ventes"]), la quote-part de
+    produits indirects répartis sur les titres actifs si la répartition a été activée (cf.
+    COMPTE_PRODUITS_INDIRECTS_REPARTIS ci-dessus), et — à la demande du client, pour ne pas
+    introduire une catégorie "autres produits" distincte — tout autre produit comptabilisé
+    sur un compte 7xx qui n'est ni un retour ni une remise : commissions libraires (706),
+    produits divers de gestion courante (708/758), variation de stock de produits finis
+    (7134), subventions (740), reprises sur provisions (781), produits financiers (768)...
+
+    Ces montants sont bien réels (près de 67 k€ sur le grand livre du cas d'étude, dont
+    seulement ~8,8 k€ tagués "PRODUITS INDIRECTS" et donc déjà répartis) : sans les inclure
+    ici, ils disparaissent purement et simplement du résultat net du Tableau de bord et de la
+    Synthèse financière, qui ne se réconcilient alors plus avec le résultat comptable réel
+    (somme de tous les comptes 6 et 7 du grand livre). Conformément au principe retenu, ils
+    sont directement intégrés au CA (comme n'importe quelle vente), plutôt qu'isolés dans une
+    ligne séparée."""
     prefixes_ventes = tuple(params.get("ventes") or [])
-    mask = (df_scope["Compte"].astype(str).str.startswith(prefixes_ventes)
-            if prefixes_ventes else pd.Series(False, index=df_scope.index))
-    return mask | (df_scope["Compte"].astype(str) == COMPTE_PRODUITS_INDIRECTS_REPARTIS)
+    mask_configuree = (df_scope["Compte"].astype(str).str.startswith(prefixes_ventes)
+                        if prefixes_ventes else pd.Series(False, index=df_scope.index))
+    mask_repartis = df_scope["Compte"].astype(str) == COMPTE_PRODUITS_INDIRECTS_REPARTIS
+    is_7 = df_scope["Compte"].astype(str).str.startswith("7")
+    mask_autres_7xx = is_7 & (~mask_retours(df_scope, params)) & (~mask_remises(df_scope, params))
+    return mask_configuree | mask_repartis | mask_autres_7xx
 
 def mask_charges(df_scope, params):
     """Lignes de charges : comptes configurés (params["charges"]), plus la quote-part de
@@ -203,21 +218,6 @@ def mask_charges(df_scope, params):
     mask = (df_scope["Compte"].astype(str).str.startswith(prefixes_charges)
             if prefixes_charges else pd.Series(False, index=df_scope.index))
     return mask | (df_scope["Compte"].astype(str) == COMPTE_CHARGES_INDIRECTES_REPARTIES)
-
-def mask_autres_produits(df_scope, params):
-    """Produits comptabilisés sur des comptes 7xx AUTRES que les ventes (701), les
-    retours/remises (709) ou leur quote-part déjà réintégrée via la répartition (compte
-    PRODUITS INDIRECTS REPARTIS, déjà couvert par mask_ventes) : commissions libraires (706),
-    produits divers de gestion courante (708/758), variation de stock de produits finis
-    (7134), subventions (740), reprises sur provisions (781), produits financiers (768)...
-
-    Sans cette ligne, ces produits bien réels — près de 67 k€ sur le grand livre du cas
-    d'étude, dont seulement ~8,8 k€ récupérés via la répartition des "PRODUITS INDIRECTS" —
-    disparaissent purement et simplement du résultat net du Tableau de bord et de la
-    Synthèse financière, qui ne se réconciliaient alors plus avec le résultat comptable réel
-    (somme de tous les comptes 6 et 7 du grand livre)."""
-    is_7 = df_scope["Compte"].astype(str).str.startswith("7")
-    return is_7 & (~mask_ventes(df_scope, params)) & (~mask_retours(df_scope, params)) & (~mask_remises(df_scope, params))
 
 def normaliser_codes_ean(df, col="Code_Analytique"):
     """Fusionne les lignes dont le code analytique commence par le même numéro EAN mais
@@ -1347,8 +1347,10 @@ elif page == "📈 Tableau de bord éditorial":
     df_r = df[mask_retours(df, params)]
     df_rem = df[mask_remises(df, params)]
     df_c = df[mask_charges(df, params)]
-    df_autres = df[mask_autres_produits(df, params)]
 
+    # CA brut/net inclut désormais tout produit (compte 7xx) qui n'est ni un retour ni une
+    # remise — commissions, subventions, reprises, produits divers... (cf. mask_ventes) : ces
+    # montants ne sont pas isolés dans une ligne séparée, ils sont directement dans le CA.
     ca_brut       = df_v["Crédit"].sum()
     # Extournes/corrections sur ventes : le compte de ventes lui-même porte parfois un débit
     # (facture annulée/corrigée a posteriori). Sans le déduire ici, le résultat net final ne se
@@ -1360,16 +1362,12 @@ elif page == "📈 Tableau de bord éditorial":
     ca_net        = ca_brut - total_retours - total_remises - corrections_ventes
     # Net débit-crédit : idem module Analyse par titre (comptes 603/713 à double sens).
     charges_tot   = df_c["Débit"].sum() - df_c["Crédit"].sum()
-    # Produits hors ventes de livres (commissions, subventions, reprises, produits divers...) :
-    # sans cette ligne, le résultat net ne se réconcilie pas avec le total comptable réel des
-    # comptes 6/7 (cf. mask_autres_produits ci-dessus).
-    autres_produits = df_autres["Crédit"].sum() - df_autres["Débit"].sum()
-    resultat      = ca_net - charges_tot + autres_produits
+    resultat      = ca_net - charges_tot
     taux_retour   = (total_retours / ca_brut * 100) if ca_brut else 0
 
     # KPIs
     st.subheader("Indicateurs clés")
-    k1, k2, k3, k4, k5, k6 = st.columns(6)
+    k1, k2, k3, k4, k5 = st.columns(5)
     k1.metric("CA brut", f"{fmt_fr(ca_brut, 0)} €")
     k2.metric("CA net", f"{fmt_fr(ca_net, 0)} €", delta=f"-{fmt_fr(total_retours+total_remises+corrections_ventes, 0)} €")
     if corrections_ventes:
@@ -1378,10 +1376,7 @@ elif page == "📈 Tableau de bord éditorial":
     k3.metric("Taux de retour", f"{taux_retour:.1f} %",
               delta_color="inverse", delta="⚠️ Élevé" if taux_retour > 25 else "✅ Normal")
     k4.metric("Charges totales", f"{fmt_fr(charges_tot, 0)} €")
-    k5.metric("Autres produits", f"{fmt_fr(autres_produits, 0)} €",
-              help="Commissions, subventions, reprises sur provisions, produits divers de gestion "
-                   "courante... comptabilisés sur des comptes 7xx autres que les ventes (701).")
-    k6.metric("Résultat net", f"{fmt_fr(resultat, 0)} €",
+    k5.metric("Résultat net", f"{fmt_fr(resultat, 0)} €",
               delta_color="normal" if resultat >= 0 else "inverse")
 
     st.divider()
@@ -2834,16 +2829,15 @@ elif page == "📊 Synthèse financière":
     # répartis (comptes non numériques "PRODUITS INDIRECTS REPARTIS"/"CHARGES INDIRECTES
     # REPARTIES"), sans quoi activer la répartition ferait disparaître ces montants des
     # totaux globaux ci-dessous (ils ne matchent plus le préfixe numérique "701"/"6").
+    # CA brut/net inclut désormais tout produit (compte 7xx) qui n'est ni un retour ni une
+    # remise — commissions, subventions, reprises, produits divers... (cf. mask_ventes) : ces
+    # montants ne sont pas isolés dans une ligne séparée, ils sont directement dans le CA.
     df_v   = filtre_mask(df, mask_ventes(df, params))
     # Exclusion des comptes remises du filtre retours (cf. mask_retours) : évite un double
     # comptage quand le compte remises (ex. 7091) est un sous-compte du compte retours (709).
     df_r   = filtre_m(df, params["retours"], exclude_prefix_list=params.get("remises"))
     df_rem = filtre_m(df, params["remises"])
     df_c   = filtre_mask(df, mask_charges(df, params))
-    # Produits hors ventes de livres (commissions, subventions, reprises, produits divers...) :
-    # sans cette ligne, le résultat net ne se réconcilie pas avec le total comptable réel des
-    # comptes 6/7 (cf. mask_autres_produits, module Analyse par titre).
-    df_autres = filtre_mask(df, mask_autres_produits(df, params))
 
     ca_brut       = df_v["Crédit"].sum() if not df_v.empty else 0
     # Extournes/corrections sur ventes (facture annulée/corrigée a posteriori, débit sur le
@@ -2855,12 +2849,11 @@ elif page == "📊 Synthèse financière":
     ca_net        = ca_brut - total_retours - total_remises - corrections_ventes
     # Net débit-crédit (Montant_net déjà calculé par filtre_m ci-dessus).
     charges_tot     = df_c["Montant_net"].sum() if not df_c.empty else 0
-    autres_produits = -df_autres["Montant_net"].sum() if not df_autres.empty else 0
-    resultat_net  = ca_net - charges_tot + autres_produits
+    resultat_net  = ca_net - charges_tot
     marge_pct     = (resultat_net / ca_brut * 100) if ca_brut else 0
 
-    soldes = [ca_brut, -total_retours, -total_remises, -corrections_ventes, ca_net, -charges_tot, autres_produits, resultat_net]
-    libelles = ["CA brut", "Retours", "Remises", "Corrections ventes", "CA net", "Charges", "Autres produits", "Résultat net"]
+    soldes = [ca_brut, -total_retours, -total_remises, -corrections_ventes, ca_net, -charges_tot, resultat_net]
+    libelles = ["CA brut", "Retours", "Remises", "Corrections ventes", "CA net", "Charges", "Résultat net"]
     df_summary = pd.DataFrame({"Poste": libelles, "Montant (€)": soldes})
 
     # ================================================
@@ -2935,12 +2928,12 @@ elif page == "📊 Synthèse financière":
         st.metric("Taux de marge nette", f"{marge_pct:.1f} %")
     with col2:
         st.subheader("Waterfall")
-        colors = ["#3B82F6", "#EF4444", "#EF4444", "#EF4444", "#10B981", "#EF4444", "#10B981",
+        colors = ["#3B82F6", "#EF4444", "#EF4444", "#EF4444", "#10B981", "#EF4444",
                   "#10B981" if resultat_net >= 0 else "#EF4444"]
         fig = go.Figure(go.Waterfall(
             name="Résultat",
             orientation="v",
-            measure=["absolute", "relative", "relative", "relative", "total", "relative", "relative", "total"],
+            measure=["absolute", "relative", "relative", "relative", "total", "relative", "total"],
             x=libelles, y=soldes,
             connector={"line": {"color": "gray", "width": 0.5}},
             decreasing={"marker": {"color": "#EF4444"}},
