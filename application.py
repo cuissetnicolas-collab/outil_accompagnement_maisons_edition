@@ -671,6 +671,12 @@ def calculer_indicateurs_titres(df, params, titres):
     res["Charges fixes imputées"] = charges_fixes.values
     res["Résultat net"] = res["Marge brute"] - res["Variation de stock (incluse au résultat, hors marge)"] - res["Charges fixes imputées"]
     res["Taux retour (%)"] = np.where(ventes_distrib.values != 0, res["Retours"] / ventes_distrib.values * 100, 0)
+    res["Taux remise (%)"] = np.where(ventes_distrib.values != 0, res["Remises"] / ventes_distrib.values * 100, 0)
+    # CA distributeur du titre (dénominateur du taux de retour/remise ci-dessus) : conservé pour
+    # repérer les cas où un taux extrême (ex. > 100 %) vient d'un dénominateur très faible plutôt
+    # que d'un vrai problème de retours (ex. titre vendu très peu en direct au distributeur mais
+    # dont des retours d'un exercice antérieur remontent sur la période).
+    res["CA distributeur"] = ventes_distrib.values
 
     def _signal(row):
         if row["Résultat net"] > 0 and row["Taux retour (%)"] < 20:
@@ -1914,6 +1920,49 @@ elif page == "📖 Analyse par titre":
         variation_stock_mrg = (var_stock_mrg["Crédit"] - var_stock_mrg["Débit"]).sum()
         st.caption(f"ℹ️ Variation de stock globale (comptes 603/713, non ventilée par titre) : "
                    f"**{fmt_fr(variation_stock_mrg, 0)} €**.")
+
+    st.divider()
+
+    # ================================================
+    # INDICATEUR — TAUX DE RETOUR PAR TITRE (repérage des gros retours)
+    # ================================================
+    st.subheader("🔁 Taux de retour par titre")
+    st.caption("Taux de retour = Retours / CA distributeur (compte distributeur strict, cf. ⚙️ Paramétrage "
+               "analytique). Triés du plus élevé au plus faible pour repérer rapidement les titres à "
+               "gros retours.")
+    indic_retour = indicateurs[["Code_Analytique", "Retours", "Remises", "CA distributeur",
+                                 "Taux retour (%)", "Taux remise (%)"]].copy()
+    indic_retour["Titre"] = indic_retour["Code_Analytique"].apply(lambda c: label_affiche(c, df))
+
+    def _alerte_taux_retour(t):
+        if t >= 100: return "🔴 Extrême (≥ 100 %)"
+        if t >= 35:  return "🔴 Élevé"
+        if t >= 20:  return "🟠 À surveiller"
+        return "🟢 Normal"
+    indic_retour["Alerte"] = indic_retour["Taux retour (%)"].apply(_alerte_taux_retour)
+
+    rc1, rc2, rc3 = st.columns(3)
+    rc1.metric("🔴 Titres à taux de retour ≥ 35 %", int((indic_retour["Taux retour (%)"] >= 35).sum()))
+    rc2.metric("dont ≥ 100 % (à vérifier en priorité)", int((indic_retour["Taux retour (%)"] >= 100).sum()))
+    rc3.metric("🟠 Titres à surveiller (20 – 35 %)",
+               int(((indic_retour["Taux retour (%)"] >= 20) & (indic_retour["Taux retour (%)"] < 35)).sum()))
+
+    aff_retour = indic_retour[["Titre", "CA distributeur", "Retours", "Remises",
+                                "Taux retour (%)", "Taux remise (%)", "Alerte"]] \
+                     .sort_values("Taux retour (%)", ascending=False)
+    st.dataframe(
+        aff_retour.style.format({
+            "CA distributeur": (lambda x: f"{fmt_fr(x, 0)} €"),
+            "Retours": (lambda x: f"{fmt_fr(x, 0)} €"),
+            "Remises": (lambda x: f"{fmt_fr(x, 0)} €"),
+            "Taux retour (%)": "{:.1f} %",
+            "Taux remise (%)": "{:.1f} %",
+        }),
+        use_container_width=True, hide_index=True
+    )
+    st.caption("ℹ️ Un taux très élevé (ex. > 100 %) vient parfois d'un CA distributeur très faible sur la "
+               "période pour ce titre (dénominateur proche de 0) plutôt que d'un vrai afflux de retours — "
+               "vérifiez la colonne **CA distributeur** avant de conclure à une anomalie.")
 
     st.divider()
 
