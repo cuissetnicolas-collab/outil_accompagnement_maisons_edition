@@ -1931,7 +1931,7 @@ elif page == "📖 Analyse par titre":
                "analytique). Triés du plus élevé au plus faible pour repérer rapidement les titres à "
                "gros retours.")
     indic_retour = indicateurs[["Code_Analytique", "Retours", "Remises", "CA distributeur",
-                                 "Taux retour (%)", "Taux remise (%)"]].copy()
+                                 "Taux retour (%)", "Taux remise (%)", "Résultat net"]].copy()
     indic_retour["Titre"] = indic_retour["Code_Analytique"].apply(lambda c: label_affiche(c, df))
 
     def _alerte_taux_retour(t):
@@ -1948,15 +1948,15 @@ elif page == "📖 Analyse par titre":
                int(((indic_retour["Taux retour (%)"] >= 20) & (indic_retour["Taux retour (%)"] < 35)).sum()))
 
     aff_retour = indic_retour[["Code_Analytique", "Titre", "CA distributeur", "Retours", "Remises",
-                                "Taux retour (%)", "Taux remise (%)", "Alerte"]] \
+                                "Taux retour (%)", "Taux remise (%)", "Résultat net", "Alerte"]] \
                      .sort_values("Taux retour (%)", ascending=False).reset_index(drop=True)
 
     # Rendu ligne par ligne (plutôt qu'un st.dataframe) pour pouvoir placer un bouton "Voir la
     # fiche" directement à côté de chaque titre — un st.dataframe seul ne permet pas d'y insérer
     # un élément interactif par ligne.
-    largeurs_retour = [2.6, 1.1, 0.9, 0.9, 0.9, 0.9, 1.4, 0.7]
+    largeurs_retour = [2.4, 1.0, 0.8, 0.8, 0.9, 0.9, 1.1, 1.3, 0.6]
     en_tetes_retour = ["Titre", "CA distributeur", "Retours", "Remises",
-                        "Taux retour", "Taux remise", "Alerte", ""]
+                        "Taux retour", "Taux remise", "Résultat net", "Alerte", ""]
     hc = st.columns(largeurs_retour)
     for c, libelle in zip(hc, en_tetes_retour):
         c.markdown(f"**{libelle}**")
@@ -1970,13 +1970,20 @@ elif page == "📖 Analyse par titre":
             rc[3].write(f"{fmt_fr(row['Remises'], 0)} €")
             rc[4].write(f"{row['Taux retour (%)']:.1f} %")
             rc[5].write(f"{row['Taux remise (%)']:.1f} %")
-            rc[6].write(row["Alerte"])
-            if rc[7].button("📖", key=f"fiche_retour_{row['Code_Analytique']}", help="Ouvrir la fiche de ce titre"):
+            couleur_resultat = "#991b1b" if row["Résultat net"] < 0 else "#065f46"
+            rc[6].markdown(f"<span style='color:{couleur_resultat}'>{fmt_fr(row['Résultat net'], 0)} €</span>",
+                            unsafe_allow_html=True)
+            rc[7].write(row["Alerte"])
+            if rc[8].button("📖", key=f"fiche_retour_{row['Code_Analytique']}", help="Ouvrir la fiche de ce titre"):
                 afficher_fiche_titre(row["Code_Analytique"], df, params)
 
     st.caption("ℹ️ Un taux très élevé (ex. > 100 %) vient parfois d'un CA distributeur très faible sur la "
                "période pour ce titre (dénominateur proche de 0) plutôt que d'un vrai afflux de retours — "
                "vérifiez la colonne **CA distributeur** avant de conclure à une anomalie.")
+    st.caption("💡 Repère utile : un titre combinant **taux de retour élevé** et **résultat net faible/négatif** "
+               "n'est pas forcément pénalisé par les retours eux-mêmes — vérifiez aussi ses charges de "
+               "fabrication (fiche titre) : un tirage surdimensionné par rapport aux ventes réelles peut "
+               "peser bien plus lourd sur le résultat que le coût des retours.")
 
     st.divider()
 
