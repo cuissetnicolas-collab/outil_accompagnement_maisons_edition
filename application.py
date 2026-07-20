@@ -1950,35 +1950,33 @@ elif page == "📖 Analyse par titre":
     aff_retour = indic_retour[["Code_Analytique", "Titre", "CA distributeur", "Retours", "Remises",
                                 "Taux retour (%)", "Taux remise (%)", "Alerte"]] \
                      .sort_values("Taux retour (%)", ascending=False).reset_index(drop=True)
-    cols_aff_retour = ["Titre", "CA distributeur", "Retours", "Remises",
-                        "Taux retour (%)", "Taux remise (%)", "Alerte"]
-    st.dataframe(
-        aff_retour[cols_aff_retour].style.format({
-            "CA distributeur": (lambda x: f"{fmt_fr(x, 0)} €"),
-            "Retours": (lambda x: f"{fmt_fr(x, 0)} €"),
-            "Remises": (lambda x: f"{fmt_fr(x, 0)} €"),
-            "Taux retour (%)": "{:.1f} %",
-            "Taux remise (%)": "{:.1f} %",
-        }),
-        use_container_width=True, hide_index=True
-    )
+
+    # Rendu ligne par ligne (plutôt qu'un st.dataframe) pour pouvoir placer un bouton "Voir la
+    # fiche" directement à côté de chaque titre — un st.dataframe seul ne permet pas d'y insérer
+    # un élément interactif par ligne.
+    largeurs_retour = [2.6, 1.1, 0.9, 0.9, 0.9, 0.9, 1.4, 0.7]
+    en_tetes_retour = ["Titre", "CA distributeur", "Retours", "Remises",
+                        "Taux retour", "Taux remise", "Alerte", ""]
+    hc = st.columns(largeurs_retour)
+    for c, libelle in zip(hc, en_tetes_retour):
+        c.markdown(f"**{libelle}**")
+
+    with st.container(height=480):
+        for _, row in aff_retour.iterrows():
+            rc = st.columns(largeurs_retour)
+            rc[0].write(row["Titre"])
+            rc[1].write(f"{fmt_fr(row['CA distributeur'], 0)} €")
+            rc[2].write(f"{fmt_fr(row['Retours'], 0)} €")
+            rc[3].write(f"{fmt_fr(row['Remises'], 0)} €")
+            rc[4].write(f"{row['Taux retour (%)']:.1f} %")
+            rc[5].write(f"{row['Taux remise (%)']:.1f} %")
+            rc[6].write(row["Alerte"])
+            if rc[7].button("📖", key=f"fiche_retour_{row['Code_Analytique']}", help="Ouvrir la fiche de ce titre"):
+                afficher_fiche_titre(row["Code_Analytique"], df, params)
+
     st.caption("ℹ️ Un taux très élevé (ex. > 100 %) vient parfois d'un CA distributeur très faible sur la "
                "période pour ce titre (dénominateur proche de 0) plutôt que d'un vrai afflux de retours — "
                "vérifiez la colonne **CA distributeur** avant de conclure à une anomalie.")
-
-    # Ouverture directe de la fiche depuis ce tableau : liste pré-triée dans le même ordre
-    # (taux de retour décroissant) pour retrouver immédiatement le titre repéré ci-dessus.
-    col_sel_ret, col_btn_ret = st.columns([3, 1])
-    with col_sel_ret:
-        isbn_sel_retour = st.selectbox(
-            "Ouvrir la fiche d'un titre de ce tableau (liste triée par taux de retour décroissant)",
-            aff_retour["Code_Analytique"].tolist(),
-            format_func=lambda c: label_affiche(c, df), key="sel_isbn_taux_retour"
-        )
-    with col_btn_ret:
-        st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
-        if st.button("📖 Ouvrir la fiche", key="btn_fiche_taux_retour", use_container_width=True):
-            afficher_fiche_titre(isbn_sel_retour, df, params)
 
     st.divider()
 
