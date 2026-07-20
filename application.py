@@ -1947,11 +1947,13 @@ elif page == "📖 Analyse par titre":
     rc3.metric("🟠 Titres à surveiller (20 – 35 %)",
                int(((indic_retour["Taux retour (%)"] >= 20) & (indic_retour["Taux retour (%)"] < 35)).sum()))
 
-    aff_retour = indic_retour[["Titre", "CA distributeur", "Retours", "Remises",
+    aff_retour = indic_retour[["Code_Analytique", "Titre", "CA distributeur", "Retours", "Remises",
                                 "Taux retour (%)", "Taux remise (%)", "Alerte"]] \
-                     .sort_values("Taux retour (%)", ascending=False)
+                     .sort_values("Taux retour (%)", ascending=False).reset_index(drop=True)
+    cols_aff_retour = ["Titre", "CA distributeur", "Retours", "Remises",
+                        "Taux retour (%)", "Taux remise (%)", "Alerte"]
     st.dataframe(
-        aff_retour.style.format({
+        aff_retour[cols_aff_retour].style.format({
             "CA distributeur": (lambda x: f"{fmt_fr(x, 0)} €"),
             "Retours": (lambda x: f"{fmt_fr(x, 0)} €"),
             "Remises": (lambda x: f"{fmt_fr(x, 0)} €"),
@@ -1963,6 +1965,20 @@ elif page == "📖 Analyse par titre":
     st.caption("ℹ️ Un taux très élevé (ex. > 100 %) vient parfois d'un CA distributeur très faible sur la "
                "période pour ce titre (dénominateur proche de 0) plutôt que d'un vrai afflux de retours — "
                "vérifiez la colonne **CA distributeur** avant de conclure à une anomalie.")
+
+    # Ouverture directe de la fiche depuis ce tableau : liste pré-triée dans le même ordre
+    # (taux de retour décroissant) pour retrouver immédiatement le titre repéré ci-dessus.
+    col_sel_ret, col_btn_ret = st.columns([3, 1])
+    with col_sel_ret:
+        isbn_sel_retour = st.selectbox(
+            "Ouvrir la fiche d'un titre de ce tableau (liste triée par taux de retour décroissant)",
+            aff_retour["Code_Analytique"].tolist(),
+            format_func=lambda c: label_affiche(c, df), key="sel_isbn_taux_retour"
+        )
+    with col_btn_ret:
+        st.markdown("<div style='height:28px'></div>", unsafe_allow_html=True)
+        if st.button("📖 Ouvrir la fiche", key="btn_fiche_taux_retour", use_container_width=True):
+            afficher_fiche_titre(isbn_sel_retour, df, params)
 
     st.divider()
 
