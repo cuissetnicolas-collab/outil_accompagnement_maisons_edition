@@ -607,11 +607,12 @@ def obtenir_statut_fiscal(auteur):
     professionnelle, RAAP) en plus de la contribution diffuseur (due dans tous les cas).
     Cherche d'abord dans le référentiel manuel (📋 Référentiel), puis dans les statuts
     assignés aux auteurs détectés automatiquement (famille analytique AUTEUR) ; par défaut
-    BNC (hypothèse la plus fréquente pour un auteur indépendant)."""
+    Traitements et salaires (préréglage demandé pour ce client, où la comptabilité montre un
+    précompte sur la quasi-totalité des auteurs)."""
     for c in st.session_state.get("royalties_referentiel", []):
         if c.get("auteur") == auteur:
-            return c.get("statut_fiscal", "BNC (droits d'auteur)")
-    return st.session_state.get("statut_fiscal_auto", {}).get(auteur, "BNC (droits d'auteur)")
+            return c.get("statut_fiscal", "Traitements et salaires (option assimilé)")
+    return st.session_state.get("statut_fiscal_auto", {}).get(auteur, "Traitements et salaires (option assimilé)")
 
 def calculer_indicateurs_titres(df, params, titres):
     """Calcule, pour chaque titre actif, CA brut/net, charges variables, charges fixes
@@ -2439,34 +2440,32 @@ elif page == "✍️ Droits d'auteurs":
     st.info("""
     **Comment fonctionne ce module ?**
 
-    Les droits d'auteurs sont **déjà calculés et provisionnés dans votre comptabilité analytique**
-    (droits bruts, précompte URSSAF, contribution diffuseur, net dû) — ce module ne fait pas de
-    double calcul, il fait remonter titre par titre, puis auteur par auteur, ce qui est réellement
-    comptabilisé. Un simulateur reste disponible pour estimer un montant *avant* la provision de clôture.
+    Les droits d'auteurs **déjà comptabilisés** sont lus directement dans votre comptabilité analytique
+    (onglet Réel, qui fait foi). Un simulateur simple reste disponible pour estimer un montant
+    *avant* la provision de clôture, à titre indicatif.
 
     1. **📋 Référentiel** : correspondance ISBN ↔ auteur (détectée automatiquement si vous utilisez une
-       famille analytique AUTEUR ; à défaut, à compléter manuellement) + paramètres du simulateur
-    2. **🧮 Simulateur** : estimation par paliers, à titre indicatif avant comptabilisation
-    3. **🏛️ Simulateur URSSAF** : estimation du précompte, à titre indicatif
-    4. **📒 Réel (comptabilisé)** : montants réellement provisionnés, lus directement dans le grand livre
-    5. **📄 Relevés par auteur** : relevé de compte par auteur (priorité au réel), exportable en Excel
+       famille analytique AUTEUR ; à défaut, à compléter manuellement) + contrats (taux, paliers)
+    2. **🧮 Simulateur** : estimation des droits bruts (taux forfaitaire ou paliers) puis du précompte
+       URSSAF et de la contribution diffuseur — à titre indicatif, avant provision
+    3. **📒 Réel (comptabilisé)** : montants réellement provisionnés, lus directement dans le grand livre
+    4. **📄 Relevés par auteur** : relevé de compte par auteur (priorité au réel), exportable en Excel
     """)
 
     # ──────────────────────────────────────────────
     # INITIALISATION DU RÉFÉRENTIEL EN SESSION
     # Structure : liste de dicts {auteur, isbn, titre, taux_base, paliers, part_auteur}
     # paliers : liste de {seuil, taux} — ex. [{seuil:0, taux:10}, {seuil:10000, taux:12}]
-    # Ce référentiel sert (a) de repli si aucune famille analytique AUTEUR n'est mappée, et
-    # (b) au simulateur par paliers (taux, assiette, répartition co-auteurs), qui ne peut de
-    # toute façon pas être déduit de la seule comptabilité.
+    # Ce référentiel sert (a) de repli si aucune famille analytique AUTEUR n'est mappée dans le
+    # grand livre (correspondance ISBN → auteur, part de chacun en cas de co-auteurs), et (b) de
+    # base de taux (forfaitaire ou paliers) pour le 🧮 Simulateur.
     # ──────────────────────────────────────────────
     if "royalties_referentiel" not in st.session_state:
         st.session_state["royalties_referentiel"] = []
 
-    onglet1, onglet2, onglet3, onglet4, onglet5 = st.tabs([
+    onglet1, onglet2, onglet3, onglet4 = st.tabs([
         "📋 Référentiel",
         "🧮 Simulateur",
-        "🏛️ Simulateur URSSAF",
         "📒 Réel (comptabilisé)",
         "📄 Relevés par auteur"
     ])
@@ -2484,8 +2483,8 @@ elif page == "✍️ Droits d'auteurs":
                 pd.DataFrame([{"ISBN": k, "Auteur (détecté)": v} for k, v in mapping_auto_preview.items()]),
                 use_container_width=True
             )
-            st.caption("Le référentiel ci-dessous reste utile pour le **🧮 Simulateur** (taux, paliers, "
-                       "répartition co-auteurs), qui ne peut pas être déduit de la comptabilité seule.")
+            st.caption("Le référentiel ci-dessous reste utile en cas de correspondance ISBN → auteur "
+                       "manquante ou pour préciser la répartition entre co-auteurs.")
 
             # ── Statut fiscal des auteurs détectés automatiquement ──
             # Le régime (BNC vs option pour les traitements et salaires) est un choix
@@ -2506,7 +2505,7 @@ elif page == "✍️ Droits d'auteurs":
                 if pd.notna(v) and str(v).strip() not in ("", "nan", "None")
             })
             for auteur_det in auteurs_detectes:
-                valeur_defaut = st.session_state["statut_fiscal_auto"].get(auteur_det, "BNC (droits d'auteur)")
+                valeur_defaut = st.session_state["statut_fiscal_auto"].get(auteur_det, "Traitements et salaires (option assimilé)")
                 st.session_state["statut_fiscal_auto"][auteur_det] = st.selectbox(
                     f"Statut fiscal — {auteur_det}",
                     ["BNC (droits d'auteur)", "Traitements et salaires (option assimilé)"],
@@ -2541,31 +2540,42 @@ elif page == "✍️ Droits d'auteurs":
             )
             inp_statut = st.selectbox(
                 "Statut fiscal de l'auteur",
-                ["BNC (droits d'auteur)", "Traitements et salaires (option assimilé)"],
-                help="BNC : l'auteur gère lui-même ses cotisations, seule la contribution diffuseur est due par "
-                     "l'éditeur. Traitements et salaires : le diffuseur précompte en plus CSG/CRDS, formation "
-                     "professionnelle et RAAP, à reverser à l'URSSAF."
+                ["Traitements et salaires (option assimilé)", "BNC (droits d'auteur)"],
+                index=0,
+                help="Traitements et salaires : le diffuseur précompte CSG/CRDS, formation professionnelle et "
+                     "RAAP en plus de la contribution diffuseur, à reverser à l'URSSAF (préréglé par défaut pour "
+                     "ce client). BNC : l'auteur gère lui-même ses cotisations, seule la contribution diffuseur "
+                     "est due par l'éditeur."
             )
 
-        st.markdown("**Paliers de droits**")
-        st.caption("Saisissez les paliers de CA à partir desquels le taux change. "
-                   "Si pas de paliers, laissez un seul palier avec seuil = 0.")
+        st.markdown("**Taux des droits**")
+        mode_taux = st.radio(
+            "Mode de calcul",
+            ["Taux forfaitaire (un seul taux, quel que soit le CA)", "Paliers progressifs (le taux change selon le CA)"],
+            horizontal=True,
+            key="mode_taux_contrat"
+        )
 
-        nb_paliers = st.number_input("Nombre de paliers", min_value=1, max_value=5, value=1, step=1)
-        paliers = []
-        for i in range(int(nb_paliers)):
-            pc1, pc2 = st.columns(2)
-            with pc1:
-                seuil = st.number_input(
-                    f"Palier {i+1} — CA à partir de (€)", value=0 if i == 0 else i * 5000,
-                    key=f"seuil_{i}"
-                )
-            with pc2:
-                taux = st.number_input(
-                    f"Palier {i+1} — Taux (%)", value=10.0 if i == 0 else 12.0,
-                    key=f"taux_{i}"
-                )
-            paliers.append({"seuil": seuil, "taux": taux})
+        if mode_taux.startswith("Taux forfaitaire"):
+            taux_forfait = st.number_input("Taux forfaitaire (%)", value=10.0, step=0.5, key="taux_forfait_contrat")
+            paliers = [{"seuil": 0, "taux": taux_forfait}]
+        else:
+            st.caption("Saisissez les paliers de CA à partir desquels le taux change.")
+            nb_paliers = st.number_input("Nombre de paliers", min_value=2, max_value=5, value=2, step=1)
+            paliers = []
+            for i in range(int(nb_paliers)):
+                pc1, pc2 = st.columns(2)
+                with pc1:
+                    seuil = st.number_input(
+                        f"Palier {i+1} — CA à partir de (€)", value=0 if i == 0 else i * 5000,
+                        key=f"seuil_{i}"
+                    )
+                with pc2:
+                    taux = st.number_input(
+                        f"Palier {i+1} — Taux (%)", value=10.0 if i == 0 else 12.0,
+                        key=f"taux_{i}"
+                    )
+                paliers.append({"seuil": seuil, "taux": taux})
 
         if st.button("➕ Ajouter ce contrat"):
             if inp_auteur and inp_isbn:
@@ -2601,9 +2611,9 @@ elif page == "✍️ Droits d'auteurs":
                         i += 1
                     if not paliers_import:
                         paliers_import = [{"seuil": 0, "taux": 10.0}]
-                    statut_brut = str(row.get("statut_fiscal", "BNC")).strip().upper()
-                    statut_import = ("Traitements et salaires (option assimilé)" if statut_brut in ("TS", "TRAITEMENTS ET SALAIRES")
-                                       else "BNC (droits d'auteur)")
+                    statut_brut = str(row.get("statut_fiscal", "TS")).strip().upper()
+                    statut_import = ("BNC (droits d'auteur)" if statut_brut in ("BNC",)
+                                       else "Traitements et salaires (option assimilé)")
                     st.session_state["royalties_referentiel"].append({
                         "auteur":   str(row.get("auteur", "")),
                         "isbn":     str(row.get("isbn", "")).strip(),
@@ -2634,7 +2644,7 @@ elif page == "✍️ Droits d'auteurs":
                     "Titre": c["titre"],
                     "Part (%)": c["part"],
                     "Assiette": c["assiette"],
-                    "Statut fiscal": c.get("statut_fiscal", "BNC (droits d'auteur)"),
+                    "Statut fiscal": c.get("statut_fiscal", "Traitements et salaires (option assimilé)"),
                     "Paliers": paliers_str
                 })
             df_ref_display = pd.DataFrame(rows_display)
@@ -2658,42 +2668,41 @@ elif page == "✍️ Droits d'auteurs":
             st.info("Aucun contrat enregistré. Commencez par en ajouter un ci-dessus.")
 
     # ══════════════════════════════════════════════
-    # ONGLET 2 — SIMULATEUR (ESTIMATION PAR PALIERS)
+    # ONGLET 2 — SIMULATEUR (DROITS D'AUTEUR + URSSAF)
+    # Estimation simple, à titre indicatif avant provision de clôture. Le taux peut être
+    # forfaitaire (un seul taux) ou progressif par paliers de CA — cf. mode choisi dans le
+    # référentiel de contrats (onglet précédent).
     # ══════════════════════════════════════════════
     with onglet2:
-        st.subheader("Simulateur — estimation par paliers")
-        st.caption("⚠️ Ceci est une estimation indicative (taux/paliers saisis dans le référentiel), "
-                   "utile avant la provision de clôture. Les montants réellement dus sont dans l'onglet "
-                   "**📒 Réel (comptabilisé)**.")
+        st.subheader("Simulateur — droits d'auteur & précompte URSSAF")
+        st.caption("⚠️ Estimation indicative (taux/paliers saisis dans le référentiel), avant provision de "
+                   "clôture. Les montants réellement dus et déclarés sont dans l'onglet **📒 Réel (comptabilisé)**.")
 
         if "df_pivot" not in st.session_state:
             st.warning("⚠️ Générer d'abord le SOCLE EDITION.")
         elif not st.session_state["royalties_referentiel"]:
             st.warning("⚠️ Saisir au moins un contrat dans l'onglet Référentiel.")
         else:
-            df_pivot = st.session_state["df_pivot"].copy()
-            params   = st.session_state["param_comptes"]
+            df_pivot_sim = st.session_state["df_pivot"].copy()
+            params_sim   = st.session_state["param_comptes"]
 
-            # ── Calcul des CA par ISBN (brut, retours, remises, net) ──
-            def ca_isbn(df, prefix_list):
+            # ── Étape 1 : droits bruts (CA par ISBN × taux forfaitaire ou paliers) ──
+            st.markdown("**Étape 1 — Droits bruts**")
+
+            def ca_isbn_sim(df, prefix_list):
                 if not prefix_list:
                     return pd.Series(dtype=float)
                 mask = df["Compte"].astype(str).str.startswith(tuple(prefix_list))
                 return df[mask].groupby("Code_Analytique")["Crédit"].sum() \
                      - df[mask].groupby("Code_Analytique")["Débit"].sum()
 
-            ca_brut    = ca_isbn(df_pivot, params["ventes"])
-            ca_retours = ca_isbn(df_pivot, params["retours"])
-            ca_remises = ca_isbn(df_pivot, params["remises"])
+            ca_brut_sim    = ca_isbn_sim(df_pivot_sim, params_sim["ventes"])
+            ca_retours_sim = ca_isbn_sim(df_pivot_sim, params_sim["retours"])
+            ca_remises_sim = ca_isbn_sim(df_pivot_sim, params_sim["remises"])
 
-            # ── Fonction de calcul par paliers ──
-            def calcul_droits_paliers(base, paliers):
-                """
-                Calcule les droits dus selon des paliers progressifs.
-                paliers : liste triée de {seuil, taux}
-                Exemple : [{seuil:0, taux:10}, {seuil:10000, taux:12}]
-                → de 0 à 10 000€ : 10% ; au-delà : 12%
-                """
+            def calcul_droits_paliers_sim(base, paliers):
+                """Calcule les droits dus selon des paliers progressifs (ou un taux forfaitaire
+                si un seul palier avec seuil=0 est fourni)."""
                 paliers_sorted = sorted(paliers, key=lambda p: p["seuil"])
                 droits = 0.0
                 for i, palier in enumerate(paliers_sorted):
@@ -2705,206 +2714,110 @@ elif page == "✍️ Droits d'auteurs":
                     droits += tranche * palier["taux"] / 100
                 return droits
 
-            # ── Boucle sur chaque contrat ──
-            resultats = []
+            resultats_sim = []
             for contrat in st.session_state["royalties_referentiel"]:
                 isbn = contrat["isbn"]
-
-                ca_b  = float(ca_brut.get(isbn, 0))
-                ca_r  = float(ca_retours.get(isbn, 0))
-                ca_re = float(ca_remises.get(isbn, 0))
+                ca_b  = float(ca_brut_sim.get(isbn, 0))
+                ca_r  = float(ca_retours_sim.get(isbn, 0))
+                ca_re = float(ca_remises_sim.get(isbn, 0))
                 ca_n  = ca_b - abs(ca_r) - abs(ca_re)
 
-                # Choix de l'assiette
-                if contrat["assiette"] == "CA brut HT":
-                    base = ca_b
-                else:
-                    # "CA net HT (après retours et remises)" par défaut
-                    base = max(ca_n, 0)
+                base = ca_b if contrat["assiette"] == "CA brut HT" else max(ca_n, 0)
 
-                droits_bruts_total = calcul_droits_paliers(base, contrat["paliers"])
+                mode_calc = ("Taux forfaitaire" if len(contrat["paliers"]) == 1
+                             and contrat["paliers"][0]["seuil"] == 0 else "Paliers progressifs")
+                droits_bruts_total = calcul_droits_paliers_sim(base, contrat["paliers"])
                 droits_bruts_part  = droits_bruts_total * contrat["part"] / 100
 
-                resultats.append({
-                    "Auteur":         contrat["auteur"],
-                    "ISBN":           isbn,
-                    "Titre":          contrat["titre"],
+                resultats_sim.append({
+                    "Auteur":          contrat["auteur"],
+                    "ISBN":            isbn,
+                    "Titre":           contrat["titre"],
+                    "Statut fiscal":   contrat.get("statut_fiscal", "Traitements et salaires (option assimilé)"),
+                    "Mode de calcul":  mode_calc,
                     "Part auteur (%)": contrat["part"],
-                    "Assiette":       contrat["assiette"],
-                    "CA brut (€)":    round(ca_b, 2),
-                    "Retours (€)":    round(abs(ca_r), 2),
-                    "Remises (€)":    round(abs(ca_re), 2),
+                    "Assiette":        contrat["assiette"],
+                    "CA brut (€)":     round(ca_b, 2),
+                    "Retours (€)":     round(abs(ca_r), 2),
+                    "Remises (€)":     round(abs(ca_re), 2),
                     "Base calcul (€)": round(base, 2),
                     "Droits bruts (€)": round(droits_bruts_part, 2),
                 })
 
-            df_resultats = pd.DataFrame(resultats)
-            st.session_state["df_royalties_resultats"] = df_resultats
+            df_sim = pd.DataFrame(resultats_sim)
 
-            if df_resultats.empty:
+            if df_sim.empty:
                 st.info("Aucune correspondance trouvée entre les ISBN du référentiel et ceux du SOCLE.")
             else:
                 st.dataframe(
-                    df_resultats.style.format({
-                        "CA brut (€)": (lambda x: fmt_fr(x, 2)),
-                        "Retours (€)": (lambda x: fmt_fr(x, 2)),
-                        "Remises (€)": (lambda x: fmt_fr(x, 2)),
-                        "Base calcul (€)": (lambda x: fmt_fr(x, 2)),
-                        "Droits bruts (€)": (lambda x: fmt_fr(x, 2)),
-                    }),
+                    df_sim.style.format({c: (lambda x: fmt_fr(x, 2)) for c in
+                                          ["CA brut (€)", "Retours (€)", "Remises (€)",
+                                           "Base calcul (€)", "Droits bruts (€)"]}),
+                    use_container_width=True
+                )
+                st.metric("💰 Total droits d'auteurs bruts estimés", f"{fmt_fr(df_sim['Droits bruts (€)'].sum(), 2)} €")
+
+                # ── Étape 2 : précompte URSSAF + contribution diffuseur ──
+                st.divider()
+                st.markdown("**Étape 2 — Précompte URSSAF et contribution diffuseur**")
+                st.caption(
+                    "Contribution diffuseur due dans tous les cas. Précompte (CSG/CRDS, formation "
+                    "professionnelle, RAAP) dû uniquement pour les auteurs en **traitements et salaires** "
+                    "(statut fixé dans le référentiel) ; un auteur en **BNC** gère lui-même ses cotisations."
+                )
+
+                col_u1, col_u2, col_u3, col_u4 = st.columns(4)
+                taux_csg_crds_sim = col_u1.number_input(
+                    "CSG + CRDS (%)", value=9.70, step=0.01, key="sim_csg_crds",
+                    help="CSG 9,2% + CRDS 0,5% — appliqué uniquement aux auteurs en traitements et salaires"
+                )
+                taux_fp_sim = col_u2.number_input(
+                    "Formation professionnelle (%)", value=1.00, step=0.01, key="sim_fp",
+                    help="Appliqué uniquement aux auteurs en traitements et salaires"
+                )
+                taux_raap_sim = col_u3.number_input(
+                    "Retraite complémentaire RAAP (%)", value=0.0, step=0.01, key="sim_raap",
+                    help="Variable selon revenus de l'auteur. Appliqué uniquement aux auteurs en traitements et salaires."
+                )
+                taux_diffuseur_sim = col_u4.number_input(
+                    "Contribution diffuseur (%)", value=1.10, step=0.05, key="sim_diffuseur",
+                    help="Due sur les droits bruts, quel que soit le statut fiscal de l'auteur"
+                )
+
+                est_ts_sim = df_sim["Statut fiscal"].str.startswith("Traitements")
+                df_sim["Assiette URSSAF (€)"]  = df_sim["Droits bruts (€)"] * ASSIETTE_COEFF
+                df_sim["Précompte URSSAF (€)"] = np.where(
+                    est_ts_sim,
+                    df_sim["Assiette URSSAF (€)"] * taux_csg_crds_sim / 100
+                    + df_sim["Droits bruts (€)"] * taux_fp_sim / 100
+                    + df_sim["Assiette URSSAF (€)"] * taux_raap_sim / 100,
+                    0.0
+                )
+                df_sim["Contribution diffuseur (€)"] = df_sim["Droits bruts (€)"] * taux_diffuseur_sim / 100
+                df_sim["Total dû à l'URSSAF (€)"]    = df_sim["Précompte URSSAF (€)"] + df_sim["Contribution diffuseur (€)"]
+                df_sim["Net à payer auteur (€)"]     = df_sim["Droits bruts (€)"] - df_sim["Précompte URSSAF (€)"]
+
+                cols_sim_urssaf = ["Auteur", "Titre", "Statut fiscal", "Droits bruts (€)",
+                                    "Précompte URSSAF (€)", "Contribution diffuseur (€)",
+                                    "Total dû à l'URSSAF (€)", "Net à payer auteur (€)"]
+                st.dataframe(
+                    df_sim[cols_sim_urssaf].style.format({c: (lambda x: fmt_fr(x, 2)) for c in cols_sim_urssaf if "(€)" in c}),
                     use_container_width=True
                 )
 
-                total_droits = df_resultats["Droits bruts (€)"].sum()
-                st.metric("💰 Total droits d'auteurs bruts dus", f"{fmt_fr(total_droits, 2)} €")
-
-                # Graphique droits par titre
-                fig_droits = px.bar(
-                    df_resultats.sort_values("Droits bruts (€)", ascending=False),
-                    x="Titre", y="Droits bruts (€)", color="Auteur",
-                    title="Droits d'auteurs par titre",
-                    labels={"Droits bruts (€)": "Droits (€)", "Titre": ""},
-                    text_auto=".0f"
-                )
-                fig_droits.update_traces(textposition="outside")
-                fig_droits.update_layout(xaxis_tickangle=-30)
-                st.plotly_chart(fig_droits, use_container_width=True)
+                total_precompte_sim = df_sim["Précompte URSSAF (€)"].sum()
+                total_diffuseur_sim = df_sim["Contribution diffuseur (€)"].sum()
+                total_urssaf_sim    = df_sim["Total dû à l'URSSAF (€)"].sum()
+                col_m1, col_m2, col_m3, col_m4 = st.columns(4)
+                col_m1.metric("Droits bruts totaux", f"{fmt_fr(df_sim['Droits bruts (€)'].sum(), 2)} €")
+                col_m2.metric("Précompte URSSAF (TS uniquement)", f"{fmt_fr(total_precompte_sim, 2)} €")
+                col_m3.metric("Contribution diffuseur (tous)", f"{fmt_fr(total_diffuseur_sim, 2)} €")
+                col_m4.metric("Total estimé dû à l'URSSAF", f"{fmt_fr(total_urssaf_sim, 2)} €")
 
     # ══════════════════════════════════════════════
-    # ONGLET 3 — SIMULATEUR URSSAF
+    # ONGLET 3 — RÉEL (COMPTABILISÉ)
     # ══════════════════════════════════════════════
     with onglet3:
-        st.subheader("Simulateur URSSAF — Précompte diffuseur")
-        st.caption("⚠️ Estimation basée sur le simulateur de l'onglet précédent — à comparer avec les montants "
-                   "réellement provisionnés dans l'onglet **📒 Réel (comptabilisé)**.")
-
-        st.markdown("""
-        En tant qu'éditeur/diffuseur, vous devez dans tous les cas la **contribution diffuseur**, quel que
-        soit le statut fiscal de l'auteur. Vous êtes en revanche **précompteur** des cotisations sociales
-        (CSG/CRDS, formation professionnelle, RAAP) uniquement pour les auteurs ayant opté pour le régime
-        des **traitements et salaires** : dans ce cas, vous les prélevez sur les droits bruts avant de
-        verser le net à l'auteur, puis vous les reversez à l'URSSAF. Un auteur en **BNC** gère lui-même ses
-        cotisations : vous ne devez alors que la contribution diffuseur (cf. statut fiscal renseigné dans
-        l'onglet **📋 Référentiel**).
-
-        **Assiette précompte** = droits bruts × 98,25% (abattement forfaitaire de 1,75%)
-        """)
-
-        col_u1, col_u2, col_u3, col_u4 = st.columns(4)
-        taux_csg_crds = col_u1.number_input(
-            "CSG + CRDS (%)", value=9.70, step=0.01,
-            help="CSG 9,2% + CRDS 0,5% = 9,7% par défaut — appliqué uniquement aux auteurs en traitements et salaires"
-        )
-        taux_fp = col_u2.number_input(
-            "Formation professionnelle (%)", value=1.00, step=0.01,
-            help="1% des droits bruts — appliqué uniquement aux auteurs en traitements et salaires"
-        )
-        taux_raap = col_u3.number_input(
-            "Retraite complémentaire RAAP (%)", value=0.0, step=0.01,
-            help="Variable selon revenus annuels de l'auteur. Laisser à 0 si géré séparément. "
-                 "Appliqué uniquement aux auteurs en traitements et salaires."
-        )
-        taux_diffuseur = col_u4.number_input(
-            "Contribution diffuseur (%)", value=1.10, step=0.05,
-            help="Due sur les droits bruts, quel que soit le statut fiscal de l'auteur (BNC ou traitements "
-                 "et salaires)."
-        )
-
-        if "df_royalties_resultats" not in st.session_state:
-            st.warning("⚠️ Effectuez d'abord le calcul dans l'onglet 'Calcul des droits'.")
-        else:
-            df_r = st.session_state["df_royalties_resultats"].copy()
-
-            df_r["Statut fiscal"] = df_r["Auteur"].apply(obtenir_statut_fiscal)
-            est_ts = df_r["Statut fiscal"].str.startswith("Traitements")
-
-            df_r["Assiette URSSAF (€)"]      = df_r["Droits bruts (€)"] * ASSIETTE_COEFF
-            df_r["CSG + CRDS (€)"]           = np.where(est_ts, df_r["Assiette URSSAF (€)"] * taux_csg_crds / 100, 0.0)
-            df_r["Formation pro (€)"]        = np.where(est_ts, df_r["Droits bruts (€)"] * taux_fp / 100, 0.0)
-            df_r["Retraite RAAP (€)"]        = np.where(est_ts, df_r["Assiette URSSAF (€)"] * taux_raap / 100, 0.0)
-            df_r["Précompte URSSAF (€)"]     = df_r["CSG + CRDS (€)"] + df_r["Formation pro (€)"] + df_r["Retraite RAAP (€)"]
-            df_r["Contribution diffuseur (€)"] = df_r["Droits bruts (€)"] * taux_diffuseur / 100
-            df_r["Total dû à l'URSSAF (€)"]  = df_r["Précompte URSSAF (€)"] + df_r["Contribution diffuseur (€)"]
-            # La contribution diffuseur est une charge de l'éditeur, pas un prélèvement sur l'auteur :
-            # seul le précompte (CSG/CRDS + formation pro + RAAP, si traitements et salaires) réduit le net.
-            df_r["Net à payer auteur (€)"]   = df_r["Droits bruts (€)"] - df_r["Précompte URSSAF (€)"]
-
-            st.session_state["df_royalties_urssaf"] = df_r
-
-            cols_urssaf = [
-                "Auteur", "Titre", "Statut fiscal",
-                "Droits bruts (€)",
-                "Assiette URSSAF (€)",
-                "CSG + CRDS (€)",
-                "Formation pro (€)",
-                "Retraite RAAP (€)",
-                "Précompte URSSAF (€)",
-                "Contribution diffuseur (€)",
-                "Total dû à l'URSSAF (€)",
-                "Net à payer auteur (€)"
-            ]
-            st.dataframe(
-                df_r[cols_urssaf].style.format({
-                    c: (lambda x: fmt_fr(x, 2)) for c in cols_urssaf if "(€)" in c
-                }),
-                use_container_width=True
-            )
-
-            # Totaux — le précompte n'est dû que sur les auteurs en traitements et salaires,
-            # la contribution diffuseur est due sur tous, quel que soit le statut.
-            col_m1, col_m2, col_m3, col_m4 = st.columns(4)
-            col_m1.metric("Droits bruts totaux",         f"{fmt_fr(df_r['Droits bruts (€)'].sum(), 2)} €")
-            col_m2.metric("Précompte URSSAF (TS uniquement)", f"{fmt_fr(df_r['Précompte URSSAF (€)'].sum(), 2)} €")
-            col_m3.metric("Contribution diffuseur (tous)",  f"{fmt_fr(df_r['Contribution diffuseur (€)'].sum(), 2)} €")
-            col_m4.metric("Net versé aux auteurs",         f"{fmt_fr(df_r['Net à payer auteur (€)'].sum(), 2)} €")
-
-            total_precompte_aff  = fmt_fr(round(df_r['Précompte URSSAF (€)'].sum(), 2), 2)
-            total_diffuseur_aff  = fmt_fr(round(df_r['Contribution diffuseur (€)'].sum(), 2), 2)
-            total_urssaf_du_aff  = fmt_fr(round(df_r["Total dû à l'URSSAF (€)"].sum(), 2), 2)
-            st.markdown(f"""
-            <div style='padding:14px 18px; border-radius:12px; background:#eef2ff;
-                        margin-top:8px; margin-bottom:8px'>
-                <div style='font-weight:600; font-size:15px; margin-bottom:6px'>
-                    🏛️ Préparation de la déclaration URSSAF (estimation, avant provision de clôture)
-                </div>
-                <div>Précompte URSSAF à reverser (auteurs en traitements et salaires uniquement) :
-                     <b>{total_precompte_aff} €</b></div>
-                <div>Contribution diffuseur à reverser (tous auteurs) :
-                     <b>{total_diffuseur_aff} €</b></div>
-                <div>Total à reverser à l'URSSAF : <b>{total_urssaf_du_aff} €</b></div>
-            </div>
-            """, unsafe_allow_html=True)
-
-            nb_ts = int(est_ts.sum())
-            if nb_ts == 0:
-                st.info("ℹ️ Aucun auteur n'est actuellement tagué « Traitements et salaires » dans le "
-                        "référentiel ou les statuts auto-détectés — seule la contribution diffuseur est "
-                        "calculée. Vérifiez le statut fiscal dans l'onglet **📋 Référentiel** si ce n'est "
-                        "pas attendu.")
-
-            # Graphique cotisations vs net
-            df_urssaf_chart = df_r.groupby("Auteur", as_index=False).agg({
-                "Précompte URSSAF (€)": "sum",
-                "Contribution diffuseur (€)": "sum",
-                "Net à payer auteur (€)": "sum"
-            })
-            df_urssaf_melt = df_urssaf_chart.melt(
-                id_vars="Auteur",
-                value_vars=["Précompte URSSAF (€)", "Contribution diffuseur (€)", "Net à payer auteur (€)"],
-                var_name="Composante", value_name="Montant (€)"
-            )
-            fig_urssaf = px.bar(
-                df_urssaf_melt, x="Auteur", y="Montant (€)", color="Composante",
-                title="Répartition précompte / contribution diffuseur / net auteur",
-                barmode="stack", text_auto=".0f"
-            )
-            fig_urssaf.update_traces(textposition="inside")
-            st.plotly_chart(fig_urssaf, use_container_width=True)
-
-    # ══════════════════════════════════════════════
-    # ONGLET 4 — RÉEL (COMPTABILISÉ)
-    # ══════════════════════════════════════════════
-    with onglet4:
         st.subheader("Montants réellement comptabilisés — titre par titre, puis auteur par auteur")
         st.caption("Ce module ne recalcule rien : il lit directement, pour chaque ISBN, les écritures déjà "
                    "provisionnées dans votre grand livre analytique (droits bruts, contribution diffuseur, "
@@ -2942,16 +2855,23 @@ elif page == "✍️ Droits d'auteurs":
                        "aux droits d'auteurs) selon votre plan de comptes — vérifiez le détail en cas d'écart "
                        "inattendu avec vos attentes.")
 
-            def _par_isbn(compte, col):
+            def _par_isbn_net(compte, sens):
+                """Solde NET par ISBN (Débit − Crédit ou Crédit − Débit selon `sens`), et non un
+                seul sens sommé isolément : une écriture de reclassement/régularisation (ex. une
+                correction OD qui débite ce compte pour en réduire le solde) doit bien réduire le
+                montant retenu, plutôt que d'être ignorée parce qu'elle porte sur le "mauvais" sens."""
                 m = df_pivot_reel["Compte"].astype(str).str.strip() == str(compte).strip()
                 if not m.any():
                     return pd.Series(dtype=float)
-                return df_pivot_reel[m].groupby("Code_Analytique")[col].sum()
+                g = df_pivot_reel[m].groupby("Code_Analytique")
+                if sens == "debit":
+                    return g["Débit"].sum() - g["Crédit"].sum()
+                return g["Crédit"].sum() - g["Débit"].sum()
 
-            droits_bruts_s = _par_isbn(compte_droits_bruts, "Débit")
-            diffuseur_s    = _par_isbn(compte_diffuseur, "Débit")
-            urssaf_s       = _par_isbn(compte_urssaf, "Crédit")
-            net_du_s       = _par_isbn(compte_net_du, "Crédit")
+            droits_bruts_s = _par_isbn_net(compte_droits_bruts, "debit")
+            diffuseur_s    = _par_isbn_net(compte_diffuseur, "debit")
+            urssaf_s       = _par_isbn_net(compte_urssaf, "credit")
+            net_du_s       = _par_isbn_net(compte_net_du, "credit")
 
             isbns_reels = sorted(set(droits_bruts_s.index) | set(diffuseur_s.index)
                                 | set(urssaf_s.index) | set(net_du_s.index))
@@ -3002,74 +2922,12 @@ elif page == "✍️ Droits d'auteurs":
 
                 df_reel = pd.DataFrame(lignes)
 
-                # Contrôle de cohérence : la contribution diffuseur est due par l'éditeur
-                # directement à l'URSSAF — elle ne doit JAMAIS transiter par le montant net versé
-                # à l'auteur. Le net théoriquement dû est donc Droits bruts − Précompte URSSAF
-                # (le précompte étant lui-même nul pour un auteur en BNC). On compare ce net
-                # théorique au montant réellement comptabilisé sur le compte "net dû" (408106
-                # par défaut) pour détecter une éventuelle confusion dans les écritures.
-                df_reel["Net théorique = Bruts - Précompte (€)"] = df_reel["Droits bruts (€)"] - df_reel["Précompte URSSAF (€)"]
-                df_reel["Écart vs comptabilisé (€)"] = df_reel["Net du a l'auteur (€)"] - df_reel["Net théorique = Bruts - Précompte (€)"]
-
                 st.session_state["df_royalties_reel"] = df_reel
 
                 if isbn_sans_auteur:
                     st.warning(f"⚠️ {len(isbn_sans_auteur)} ISBN avec des droits comptabilisés mais sans auteur "
                                f"identifié : {', '.join(isbn_sans_auteur)}. Ajoutez-les dans l'onglet "
                                f"Référentiel pour qu'ils apparaissent nommément dans les relevés.")
-
-                # Contrôle de cohérence : un auteur tagué BNC ne devrait porter aucun précompte
-                # comptabilisé (seule la contribution diffuseur lui est due) — s'il y en a un,
-                # c'est soit une erreur de statut fiscal renseigné, soit une écriture à vérifier.
-                incoherents = df_reel[
-                    (~df_reel["Statut fiscal"].str.startswith("Traitements")) & (df_reel["Précompte URSSAF (€)"].abs() > 0.5)
-                ]
-                if not incoherents.empty:
-                    st.warning(
-                        f"⚠️ {len(incoherents)} ligne(s) portent un précompte URSSAF comptabilisé pour un "
-                        f"auteur tagué BNC (qui ne devrait en principe pas en supporter) : "
-                        f"{', '.join(sorted(set(incoherents['Auteur'])))}. Vérifiez le statut fiscal saisi "
-                        f"dans l'onglet **📋 Référentiel**, ou l'écriture comptable correspondante."
-                    )
-
-                # Contrôle de cohérence : le net comptabilisé s'écarte-t-il du net théorique, et
-                # cet écart correspond-il (à peu près) à la contribution diffuseur ? Signe probable
-                # que la contribution diffuseur a été ajoutée par erreur au montant versé à
-                # l'auteur au lieu d'être reversée directement à l'URSSAF.
-                ecarts_net = df_reel[df_reel["Écart vs comptabilisé (€)"].abs() > 0.5]
-                if not ecarts_net.empty:
-                    ressemble_diffuseur = (
-                        (ecarts_net["Écart vs comptabilisé (€)"] - ecarts_net["Contribution diffuseur (€)"]).abs() < 1.0
-                    )
-                    if ressemble_diffuseur.any():
-                        auteurs_concernes = sorted(set(ecarts_net.loc[ressemble_diffuseur, "Auteur"]))
-                        st.error(
-                            f"❌ Sur {int(ressemble_diffuseur.sum())} ligne(s) ({', '.join(auteurs_concernes)}), le "
-                            f"montant comptabilisé comme « net dû à l'auteur » dépasse le net théorique (droits "
-                            f"bruts − précompte) d'un montant proche de la contribution diffuseur. La contribution "
-                            f"diffuseur semble avoir été intégrée à tort au montant versé à l'auteur : elle doit "
-                            f"être reversée **directement à l'URSSAF** par l'éditeur, jamais transiter par le net "
-                            f"payé à l'auteur. Vérifiez l'écriture de provision (comptes {compte_net_du} et "
-                            f"{compte_diffuseur})."
-                        )
-                    autres_ecarts = ecarts_net[~ressemble_diffuseur]
-                    if not autres_ecarts.empty:
-                        st.warning(
-                            f"⚠️ {len(autres_ecarts)} ligne(s) supplémentaire(s) présentent un écart entre le net "
-                            f"comptabilisé et le net théorique (Droits bruts − Précompte) qui ne correspond pas à "
-                            f"la contribution diffuseur — à vérifier au cas par cas."
-                        )
-                    with st.expander("Voir le détail des écarts net comptabilisé vs théorique"):
-                        st.dataframe(
-                            ecarts_net[["Auteur", "Titre", "Droits bruts (€)", "Précompte URSSAF (€)",
-                                        "Contribution diffuseur (€)", "Net théorique = Bruts - Précompte (€)",
-                                        "Net du a l'auteur (€)", "Écart vs comptabilisé (€)"]]
-                            .style.format({c: (lambda x: fmt_fr(x, 2)) for c in
-                                           ["Droits bruts (€)", "Précompte URSSAF (€)", "Contribution diffuseur (€)",
-                                            "Net théorique = Bruts - Précompte (€)", "Net du a l'auteur (€)",
-                                            "Écart vs comptabilisé (€)"]}),
-                            use_container_width=True
-                        )
 
                 cols_montant = ["Droits bruts (€)", "Contribution diffuseur (€)",
                                 "Précompte URSSAF (€)", "Net du a l'auteur (€)"]
@@ -3233,24 +3091,16 @@ elif page == "✍️ Droits d'auteurs":
                         st.info("Aucune écriture trouvée sur le compte d'avances/à-valoirs indiqué.")
 
     # ══════════════════════════════════════════════
-    # ONGLET 5 — RELEVÉS PAR AUTEUR
+    # ONGLET 4 — RELEVÉS PAR AUTEUR
     # ══════════════════════════════════════════════
-    with onglet5:
+    with onglet4:
         st.subheader("Relevés de droits par auteur")
 
-        if "df_royalties_reel" in st.session_state and not st.session_state["df_royalties_reel"].empty:
-            source_df_key = "df_royalties_reel"
+        if "df_royalties_reel" not in st.session_state or st.session_state["df_royalties_reel"].empty:
+            st.warning("⚠️ Effectuez d'abord la lecture dans l'onglet 'Réel (comptabilisé)'.")
+        else:
             st.caption("✅ Source : montants réellement comptabilisés (onglet 📒 Réel).")
-        elif "df_royalties_urssaf" in st.session_state:
-            source_df_key = "df_royalties_urssaf"
-            st.caption("ℹ️ Source : simulateur (estimation), aucun montant réel comptabilisé trouvé pour l'instant.")
-        else:
-            source_df_key = "df_royalties_resultats"
-
-        if source_df_key not in st.session_state:
-            st.warning("⚠️ Effectuez d'abord le calcul dans l'onglet 'Simulateur' ou 'Réel (comptabilisé)'.")
-        else:
-            df_releves = st.session_state[source_df_key].copy()
+            df_releves = st.session_state["df_royalties_reel"].copy()
             auteurs    = sorted(df_releves["Auteur"].unique().tolist())
 
             auteur_sel = st.selectbox("Sélectionnez un auteur", ["Tous"] + auteurs)
@@ -3260,18 +3110,12 @@ elif page == "✍️ Droits d'auteurs":
             else:
                 df_auteur = df_releves
 
-            # Colonnes à afficher selon la source active (simulateur, simulateur+URSSAF, ou réel comptabilisé)
             cols_releve_base = [
                 "Auteur", "Statut fiscal", "Titre", "ISBN", "Part (%)",
-                "CA brut (€)", "Retours (€)", "Remises (€)",
-                "Base calcul (€)", "Droits bruts (€)",
-                "Contribution diffuseur (€)", "Précompte URSSAF (€)",
-                "Net du a l'auteur (€)", "Net à payer auteur (€)"
+                "Droits bruts (€)", "Contribution diffuseur (€)", "Précompte URSSAF (€)",
+                "Net du a l'auteur (€)"
             ]
-            cols_releve_urssaf = [
-                "CSG + CRDS (€)", "Formation pro (€)", "Retraite RAAP (€)", "Total dû à l'URSSAF (€)"
-            ]
-            cols_dispo = [c for c in cols_releve_base + cols_releve_urssaf if c in df_auteur.columns]
+            cols_dispo = [c for c in cols_releve_base if c in df_auteur.columns]
 
             st.dataframe(
                 df_auteur[cols_dispo].style.format({
