@@ -1,7 +1,7 @@
 # ============================================================
 # VISION EDITION — streamlit_app.py
 # Version 2.0 — Multi-dossiers / Accès dirigeant / Rôles
-# © 2025 Nicolas CUISSET — Mémoire d'expertise comptable
+# © 2026 Nicolas CUISSET — Mémoire d'expertise comptable
 # ============================================================
 
 import streamlit as st
@@ -1731,6 +1731,29 @@ elif role == "ec" and page == "💰 Trésorerie prévisionnelle":
         delai_fournisseurs = st.number_input("Délai règlement fournisseurs (jours)", value=30, step=15)
         delai_droits = st.number_input("Délai règlement droits d'auteurs (jours)", value=30, step=15)
 
+    # Encaissements BLDD amorçage
+    mois_amorcage = max(1, round(delai_bldd / 30))
+    with st.expander(f"📥 Encaissements BLDD d'amorçage — {mois_amorcage} mois avant le GL (recommandé)"):
+        st.caption(
+            f"Les ventes réalisées AVANT le début du GL arrivent en encaissement sur les "
+            f"{mois_amorcage} premiers mois de la période (délai BLDD {delai_bldd} j). "
+            f"Saisissez ici les montants issus de vos relevés BLDD pour corriger le creux artificiel."
+        )
+        enc_amorcage = {}
+        _mois_noms = {1:"Jan",2:"Fév",3:"Mar",4:"Avr",5:"Mai",6:"Jui",
+                      7:"Jul",8:"Aoû",9:"Sep",10:"Oct",11:"Nov",12:"Déc"}
+        cols_am = st.columns(min(mois_amorcage, 3))
+        date_ref_am = df["Date"].min()
+        for i in range(mois_amorcage):
+            p_am = (pd.Period(date_ref_am, "M") + i)
+            label_am = f"{_mois_noms[p_am.month]} {p_am.year}"
+            col_idx_am = i % min(mois_amorcage, 3)
+            val_am = cols_am[col_idx_am].number_input(
+                f"Encaissement {label_am} (€)",
+                value=0.0, step=100.0, key=f"amorcage_{i}"
+            )
+            enc_amorcage[p_am] = val_am
+
     st.divider()
     st.subheader("📋 Paramétrage des comptes par nature de flux")
     st.caption("Ajustez si vos numéros de comptes diffèrent des valeurs par défaut.")
@@ -1797,7 +1820,11 @@ elif role == "ec" and page == "💰 Trésorerie prévisionnelle":
     dec_fabric  = decaler(fabric_mens,   delai_fournisseurs)
     dec_struct  = struct_mens  # charges de structure : règlement immédiat (même mois)
 
-    flux_net = enc_bldd - dec_droits - dec_fabric - dec_struct
+    # Ajouter les encaissements d'amorçage saisis manuellement
+    enc_amorcage_serie = pd.Series(enc_amorcage).reindex(mois_list, fill_value=0)
+    enc_bldd_total = enc_bldd + enc_amorcage_serie
+
+    flux_net = enc_bldd_total - dec_droits - dec_fabric - dec_struct
     treso = tresorerie_ouv + flux_net.cumsum()
 
     st.session_state["treso_real"] = treso
@@ -1807,7 +1834,7 @@ elif role == "ec" and page == "💰 Trésorerie prévisionnelle":
     st.divider()
     m1, m2, m3, m4 = st.columns(4)
     m1.metric("Trésorerie ouverture", f"{fmt_fr(tresorerie_ouv)} €")
-    m2.metric("Encaissements BLDD (réalisé)", f"{fmt_fr(enc_bldd.sum())} €")
+    m2.metric("Encaissements BLDD (réalisé)", f"{fmt_fr(enc_bldd_total.sum())} €")
     m3.metric("Décaissements totaux", f"{fmt_fr((dec_droits+dec_fabric+dec_struct).sum())} €")
     m4.metric("Trésorerie fin de période",
               f"{fmt_fr(treso.iloc[-1])} €",
@@ -1824,7 +1851,7 @@ elif role == "ec" and page == "💰 Trésorerie prévisionnelle":
 
     df_flux_table = pd.DataFrame({
         "Mois":                  [ml(m) for m in mois_list],
-        "Encaissements BLDD (€)": enc_bldd.values.round(0),
+        "Encaissements BLDD (€)": enc_bldd_total.values.round(0),
         "Droits d'auteurs (€)":  -dec_droits.values.round(0),
         "Fabrication (€)":        -dec_fabric.values.round(0),
         "Charges structure (€)":  -dec_struct.values.round(0),
