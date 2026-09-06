@@ -1841,7 +1841,7 @@ elif role == "ec" and page == "💰 Trésorerie prévisionnelle":
     st.dataframe(
         df_flux_table.style
             .format({c: lambda x: fmt_fr(x) + " €" for c in df_flux_table.columns if "€" in c})
-            .applymap(color_flux, subset=["Flux net (€)", "Trésorerie cumulée (€)"]),
+            .map(color_flux, subset=["Flux net (€)", "Trésorerie cumulée (€)"]),
         use_container_width=True, hide_index=True
     )
 
