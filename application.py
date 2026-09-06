@@ -60,7 +60,7 @@ def fmt_fr(x, decimals=0):
 #   "ec_users": { "login": {"pw_hash": ..., "name": ..., "role": "ec"} },
 #   "dossiers": {
 #     "id_dossier": {
-#       "nom": "Editions de l'Argonaute",
+#       "nom": "L'édition Libre",
 #       "dirigeant": "Thomas Bernard",
 #       "exercice": "2025/2026",
 #       "param_comptes": {...},
