@@ -1,7 +1,7 @@
 # ============================================================
 # VISION EDITION — streamlit_app.py
 # Version 2.0 — Multi-dossiers / Accès dirigeant / Rôles
-# © 2026 Nicolas CUISSET — Mémoire d'expertise comptable
+# © 2025 Nicolas CUISSET — Mémoire d'expertise comptable
 # ============================================================
 
 import streamlit as st
@@ -1704,77 +1704,220 @@ elif role == "ec" and page == "💰 Trésorerie prévisionnelle":
     df, params = check_pivot()
     dos = get_dossier(st.session_state["dossier_id"])
     st.header(f"💰 Trésorerie prévisionnelle — {dos['nom']}")
+    st.caption("Reconstitution des flux à partir des comptes de charges et produits avec délais de règlement sectoriels.")
+
     df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
-    df["Débit"] = pd.to_numeric(df["Débit"], errors="coerce").fillna(0)
+    df["Débit"]  = pd.to_numeric(df["Débit"],  errors="coerce").fillna(0)
     df["Crédit"] = pd.to_numeric(df["Crédit"], errors="coerce").fillna(0)
-    if "Journal" not in df.columns: df["Journal"] = ""
     df = df.dropna(subset=["Date"])
+
     if df.empty:
         st.warning("Aucune écriture datée.")
         st.stop()
 
-    col1, col2 = st.columns(2)
+    st.divider()
+    st.subheader("⚙️ Paramètres")
+
+    col1, col2, col3 = st.columns(3)
     with col1:
-        date_debut = st.date_input("Date de départ", df["Date"].min())
-        tresorerie_ouv = st.number_input("Trésorerie à l'ouverture (€)", value=0.0, step=100.0)
+        tresorerie_ouv = st.number_input("Trésorerie à l'ouverture (€)", value=0.0, step=500.0,
+            help="Solde bancaire réel au début de la période analysée")
+        date_debut = st.date_input("Début de période", df["Date"].min().date())
     with col2:
-        horizon = st.slider("Horizon projection (mois)", 0, 24, 6)
-        comptes_banque = tuple(x.strip() for x in st.text_input("Comptes trésorerie","512,530,580").split(",") if x.strip())
-        journaux_exclus = tuple(x.strip() for x in st.text_input("Journaux exclus (AN)","AN").split(",") if x.strip())
+        horizon = st.slider("Horizon de projection (mois)", 0, 18, 6)
+        delai_bldd = st.number_input("Délai encaissement BLDD (jours)", value=90, step=15,
+            help="Délai standard BLDD : 90 jours après la période de vente")
+    with col3:
+        delai_fournisseurs = st.number_input("Délai règlement fournisseurs (jours)", value=30, step=15)
+        delai_droits = st.number_input("Délai règlement droits d'auteurs (jours)", value=30, step=15)
 
-    mask_an = df["Journal"].isin(journaux_exclus) if journaux_exclus else pd.Series(False, index=df.index)
-    df_flux = df[~mask_an & (df["Date"]>=pd.to_datetime(date_debut))].copy()
-    df_flux["Mois"] = df_flux["Date"].dt.to_period("M")
+    st.divider()
+    st.subheader("📋 Paramétrage des comptes par nature de flux")
+    st.caption("Ajustez si vos numéros de comptes diffèrent des valeurs par défaut.")
 
-    if df_flux.empty:
-        st.warning("Aucune écriture après la date de départ.")
+    col_a, col_b, col_c = st.columns(3)
+    with col_a:
+        cpt_ca       = st.text_input("Comptes CA (encaissements)", value=",".join(params.get("ventes", ["701"])))
+        cpt_retours  = st.text_input("Comptes retours (décaissements)", value=",".join(params.get("retours", ["709"])))
+    with col_b:
+        cpt_droits   = st.text_input("Comptes droits d'auteurs", value="604")
+        cpt_fabric   = st.text_input("Comptes fabrication / impression", value="605,604")
+    with col_c:
+        cpt_struct   = st.text_input("Comptes charges de structure", value="615,641,645,622,623,626,627")
+        cpt_remises  = st.text_input("Comptes remises commerciales", value=",".join(params.get("remises", ["709"])))
+
+    def prefixes(s):
+        return tuple(x.strip() for x in s.split(",") if x.strip())
+
+    pref_ca      = prefixes(cpt_ca)
+    pref_retours = prefixes(cpt_retours)
+    pref_droits  = prefixes(cpt_droits)
+    pref_fabric  = prefixes(cpt_fabric)
+    pref_struct  = prefixes(cpt_struct)
+    pref_remises = prefixes(cpt_remises)
+
+    df_p = df[df["Date"] >= pd.to_datetime(date_debut)].copy()
+    df_p["Mois"] = df_p["Date"].dt.to_period("M")
+    mois_list = sorted(df_p["Mois"].unique())
+
+    if not mois_list:
+        st.warning("Aucune écriture sur la période sélectionnée.")
         st.stop()
 
-    mois = sorted(df_flux["Mois"].unique())
-    encaissements = df_flux[df_flux["Compte"].astype(str).str.startswith("41")].groupby("Mois")["Crédit"].sum()
-    decaissements = df_flux[df_flux["Compte"].astype(str).str.startswith(("40","42","43","44"))].groupby("Mois")["Débit"].sum()
-    flux_net = encaissements.sub(decaissements, fill_value=0).reindex(mois, fill_value=0)
+    def agg_par_mois(df_src, prefixes_list, colonne):
+        if not prefixes_list:
+            return pd.Series(0.0, index=mois_list)
+        mask = df_src["Compte"].astype(str).str.startswith(prefixes_list)
+        return df_src[mask].groupby("Mois")[colonne].sum().reindex(mois_list, fill_value=0)
+
+    # ── Flux comptables par nature ──
+    ca_mensuel      = agg_par_mois(df_p, pref_ca,      "Crédit")
+    retours_mens    = agg_par_mois(df_p, pref_retours,  "Débit")
+    remises_mens    = agg_par_mois(df_p, pref_remises,  "Débit")
+    droits_mens     = agg_par_mois(df_p, pref_droits,   "Débit")
+    fabric_mens     = agg_par_mois(df_p, pref_fabric,   "Débit")
+    struct_mens     = agg_par_mois(df_p, pref_struct,   "Débit")
+
+    ca_net_mens = ca_mensuel - retours_mens - remises_mens
+
+    # ── Décalage selon délais de règlement ──
+    def decaler(serie, jours):
+        mois_decalage = max(1, round(jours / 30))
+        idx = serie.index.tolist()
+        decalee = pd.Series(0.0, index=idx)
+        for i, val in enumerate(serie.values):
+            j = i + mois_decalage
+            if j < len(idx):
+                decalee.iloc[j] += val
+            # sinon flux hors période → on l'ignore côté réalisé
+        return decalee
+
+    enc_bldd    = decaler(ca_net_mens,   delai_bldd)
+    dec_droits  = decaler(droits_mens,   delai_droits)
+    dec_fabric  = decaler(fabric_mens,   delai_fournisseurs)
+    dec_struct  = struct_mens  # charges de structure : règlement immédiat (même mois)
+
+    flux_net = enc_bldd - dec_droits - dec_fabric - dec_struct
     treso = tresorerie_ouv + flux_net.cumsum()
 
     st.session_state["treso_real"] = treso
     st.session_state["treso_ouverture"] = tresorerie_ouv
 
-    m1,m2,m3 = st.columns(3)
+    # ── KPIs ──
+    st.divider()
+    m1, m2, m3, m4 = st.columns(4)
     m1.metric("Trésorerie ouverture", f"{fmt_fr(tresorerie_ouv)} €")
-    m2.metric("Trésorerie clôture (réalisé)", f"{fmt_fr(treso.iloc[-1])} €")
-    m3.metric("Flux net généré", f"{fmt_fr(flux_net.sum())} €")
+    m2.metric("Encaissements BLDD (réalisé)", f"{fmt_fr(enc_bldd.sum())} €")
+    m3.metric("Décaissements totaux", f"{fmt_fr((dec_droits+dec_fabric+dec_struct).sum())} €")
+    m4.metric("Trésorerie fin de période",
+              f"{fmt_fr(treso.iloc[-1])} €",
+              delta="✅ Positive" if treso.iloc[-1] >= 0 else "⚠️ Négative",
+              delta_color="normal" if treso.iloc[-1] >= 0 else "inverse")
 
-    _MOIS_FR = {1:"Jan",2:"Fév",3:"Mar",4:"Avr",5:"Mai",6:"Jui",7:"Jul",8:"Aoû",9:"Sep",10:"Oct",11:"Nov",12:"Déc"}
+    # ── Tableau de flux détaillé ──
+    st.divider()
+    st.subheader("📊 Tableau de flux de trésorerie mensuel")
+
+    _MOIS_FR = {1:"Jan",2:"Fév",3:"Mar",4:"Avr",5:"Mai",6:"Jui",
+                7:"Jul",8:"Aoû",9:"Sep",10:"Oct",11:"Nov",12:"Déc"}
     def ml(p): return f"{_MOIS_FR.get(p.month,str(p.month))} {p.year}"
 
+    df_flux_table = pd.DataFrame({
+        "Mois":                  [ml(m) for m in mois_list],
+        "Encaissements BLDD (€)": enc_bldd.values.round(0),
+        "Droits d'auteurs (€)":  -dec_droits.values.round(0),
+        "Fabrication (€)":        -dec_fabric.values.round(0),
+        "Charges structure (€)":  -dec_struct.values.round(0),
+        "Flux net (€)":            flux_net.values.round(0),
+        "Trésorerie cumulée (€)":  treso.values.round(0),
+    })
+
+    def color_flux(val):
+        if isinstance(val, (int, float)):
+            if val > 0: return "color: #065f46"
+            if val < 0: return "color: #991b1b"
+        return ""
+
+    st.dataframe(
+        df_flux_table.style
+            .format({c: lambda x: fmt_fr(x) + " €" for c in df_flux_table.columns if "€" in c})
+            .applymap(color_flux, subset=["Flux net (€)", "Trésorerie cumulée (€)"]),
+        use_container_width=True, hide_index=True
+    )
+
+    # Export Excel
+    buf_t = BytesIO()
+    with pd.ExcelWriter(buf_t, engine="openpyxl") as writer:
+        df_flux_table.to_excel(writer, index=False, sheet_name="Flux_trésorerie")
+    buf_t.seek(0)
+    st.download_button("📥 Exporter le tableau de flux (Excel)", buf_t,
+        file_name=f"Tresorerie_{dos['nom'][:20].replace(' ','_')}.xlsx",
+        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
+
+    # ── Graphique réalisé + projections ──
+    st.divider()
+    st.subheader("📈 Évolution de la trésorerie")
+
     fig_t = go.Figure()
-    fig_t.add_trace(go.Scatter(x=[ml(m) for m in treso.index], y=treso.values,
-                               name="Réalisé", line=dict(color="#111827",width=2.5)))
+    fig_t.add_trace(go.Scatter(
+        x=[ml(m) for m in treso.index], y=treso.values,
+        name="Réalisé", line=dict(color="#111827", width=2.5),
+        fill="tozeroy", fillcolor="rgba(31,78,121,0.08)"
+    ))
 
     if horizon > 0:
-        base_enc = encaissements.iloc[-3:].mean() if len(encaissements)>=3 else (encaissements.mean() if len(encaissements) else 0)
-        base_dec = decaissements.iloc[-3:].mean() if len(decaissements)>=3 else (decaissements.mean() if len(decaissements) else 0)
-        col_sc1,col_sc2,col_sc3,col_sc4 = st.columns(4)
-        t_opt  = col_sc1.number_input("Croissance encaissements optimiste (%/mois)", value=4.0, step=0.5)/100
-        t_cent = col_sc2.number_input("Croissance encaissements central (%/mois)", value=2.0, step=0.5)/100
-        t_pess = col_sc3.number_input("Croissance encaissements pessimiste (%/mois)", value=0.0, step=0.5)/100
-        t_ch   = col_sc4.number_input("Évolution charges (%/mois)", value=1.0, step=0.5)/100
-        for nom, tc, col_hex in [("Optimiste",t_opt,"#10B981"),("Central",t_cent,"#3B82F6"),("Pessimiste",t_pess,"#EF4444")]:
-            futurs = [mois[-1]+i for i in range(1,horizon+1)]
-            enc_f = base_enc; dec_f = base_dec; proj = []
-            for m_f in futurs:
-                enc_f *= (1+tc); dec_f *= (1+t_ch); proj.append(enc_f-dec_f)
+        st.markdown("**Paramètres de projection**")
+        col_sc1, col_sc2, col_sc3, col_sc4 = st.columns(4)
+        t_opt  = col_sc1.number_input("Croissance CA optimiste (%/mois)",   value=5.0, step=0.5) / 100
+        t_cent = col_sc2.number_input("Croissance CA centrale (%/mois)",    value=2.0, step=0.5) / 100
+        t_pess = col_sc3.number_input("Croissance CA pessimiste (%/mois)",  value=0.0, step=0.5) / 100
+        t_ch   = col_sc4.number_input("Évolution charges (%/mois)",         value=1.0, step=0.5) / 100
+
+        base_enc = enc_bldd.iloc[-3:].mean() if len(enc_bldd) >= 3 else enc_bldd.mean()
+        base_dec = (dec_droits + dec_fabric + dec_struct).iloc[-3:].mean()                    if len(dec_droits) >= 3 else (dec_droits + dec_fabric + dec_struct).mean()
+
+        for nom, tc, col_hex in [
+            ("Optimiste",  t_opt,  "#10B981"),
+            ("Central",    t_cent, "#3B82F6"),
+            ("Pessimiste", t_pess, "#EF4444"),
+        ]:
+            futurs = [mois_list[-1] + i for i in range(1, horizon + 1)]
+            enc_f = float(base_enc); dec_f = float(base_dec); proj = []
+            for _ in futurs:
+                enc_f *= (1 + tc); dec_f *= (1 + t_ch)
+                proj.append(enc_f - dec_f)
             treso_proj = treso.iloc[-1] + pd.Series(proj, index=futurs).cumsum()
             treso_full = pd.concat([treso.iloc[[-1]], treso_proj])
-            fig_t.add_trace(go.Scatter(x=[ml(m) for m in treso_full.index], y=treso_full.values,
-                                       name=nom, line=dict(color=col_hex,width=2,dash="dot")))
+            fig_t.add_trace(go.Scatter(
+                x=[ml(m) for m in treso_full.index], y=treso_full.values,
+                name=nom, line=dict(color=col_hex, width=2, dash="dot")
+            ))
 
-    fig_t.add_hline(y=0, line_dash="dash", line_color="gray")
-    fig_t.update_layout(height=380, margin=dict(t=20), xaxis_title="", yaxis_title="€",
+    fig_t.add_hline(y=0, line_dash="dash", line_color="red", annotation_text="Seuil zéro")
+    fig_t.update_layout(height=400, margin=dict(t=20),
+                        xaxis_title="", yaxis_title="€ (trésorerie cumulée)",
                         legend=dict(orientation="h"))
     st.plotly_chart(fig_t, use_container_width=True)
 
-# ── DROITS D'AUTEURS (EC) ──
+    # ── Note méthodologique ──
+    with st.expander("ℹ️ Méthodologie de reconstitution des flux"):
+        st.markdown(f"""
+**Encaissements BLDD** : CA net (ventes − retours − remises) décalé de **{delai_bldd} jours**
+→ délai standard de règlement BLDD (règlement trimestriel, environ 90 jours après la période de vente).
+
+**Droits d'auteurs** : charges comptabilisées (compte {cpt_droits}) décalées de **{delai_droits} jours**
+→ délai de règlement aux auteurs après arrêté des redditions.
+
+**Fabrication / Impression** : charges comptabilisées (comptes {cpt_fabric}) décalées de **{delai_fournisseurs} jours**
+→ délai de règlement fournisseurs.
+
+**Charges de structure** : charges comptabilisées (comptes {cpt_struct}) sans décalage
+→ loyer, salaires, charges sociales : règlement dans le mois.
+
+*Les flux sont reconstitués à partir du grand livre analytique. Pour une trésorerie prévisionnelle exacte,
+il convient de rapprocher ces flux du relevé bancaire réel.*
+        """)
+
 elif role == "ec" and page == "✍️ Droits d'auteurs":
     df, params = check_pivot()
     dos = get_dossier(st.session_state["dossier_id"])
@@ -2523,81 +2666,6 @@ elif role == "ec" and page == "📄 Rapport de pilotage":
 
 
 # ── TRÉSORERIE (EC) ──
-elif role == "ec" and page == "💰 Trésorerie prévisionnelle":
-    df, params = check_pivot()
-    dos = get_dossier(st.session_state["dossier_id"])
-    st.header(f"💰 Trésorerie prévisionnelle — {dos['nom']}")
-    df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
-    df["Débit"] = pd.to_numeric(df["Débit"], errors="coerce").fillna(0)
-    df["Crédit"] = pd.to_numeric(df["Crédit"], errors="coerce").fillna(0)
-    if "Journal" not in df.columns: df["Journal"] = ""
-    df = df.dropna(subset=["Date"])
-    if df.empty:
-        st.warning("Aucune écriture datée.")
-        st.stop()
-
-    col1, col2 = st.columns(2)
-    with col1:
-        date_debut = st.date_input("Date de départ", df["Date"].min())
-        tresorerie_ouv = st.number_input("Trésorerie à l'ouverture (€)", value=0.0, step=100.0)
-    with col2:
-        horizon = st.slider("Horizon projection (mois)", 0, 24, 6)
-        comptes_banque = tuple(x.strip() for x in st.text_input("Comptes trésorerie","512,530,580").split(",") if x.strip())
-        journaux_exclus = tuple(x.strip() for x in st.text_input("Journaux exclus (AN)","AN").split(",") if x.strip())
-
-    mask_an = df["Journal"].isin(journaux_exclus) if journaux_exclus else pd.Series(False, index=df.index)
-    df_flux = df[~mask_an & (df["Date"]>=pd.to_datetime(date_debut))].copy()
-    df_flux["Mois"] = df_flux["Date"].dt.to_period("M")
-
-    if df_flux.empty:
-        st.warning("Aucune écriture après la date de départ.")
-        st.stop()
-
-    mois = sorted(df_flux["Mois"].unique())
-    encaissements = df_flux[df_flux["Compte"].astype(str).str.startswith("41")].groupby("Mois")["Crédit"].sum()
-    decaissements = df_flux[df_flux["Compte"].astype(str).str.startswith(("40","42","43","44"))].groupby("Mois")["Débit"].sum()
-    flux_net = encaissements.sub(decaissements, fill_value=0).reindex(mois, fill_value=0)
-    treso = tresorerie_ouv + flux_net.cumsum()
-
-    st.session_state["treso_real"] = treso
-    st.session_state["treso_ouverture"] = tresorerie_ouv
-
-    m1,m2,m3 = st.columns(3)
-    m1.metric("Trésorerie ouverture", f"{fmt_fr(tresorerie_ouv)} €")
-    m2.metric("Trésorerie clôture (réalisé)", f"{fmt_fr(treso.iloc[-1])} €")
-    m3.metric("Flux net généré", f"{fmt_fr(flux_net.sum())} €")
-
-    _MOIS_FR = {1:"Jan",2:"Fév",3:"Mar",4:"Avr",5:"Mai",6:"Jui",7:"Jul",8:"Aoû",9:"Sep",10:"Oct",11:"Nov",12:"Déc"}
-    def ml(p): return f"{_MOIS_FR.get(p.month,str(p.month))} {p.year}"
-
-    fig_t = go.Figure()
-    fig_t.add_trace(go.Scatter(x=[ml(m) for m in treso.index], y=treso.values,
-                               name="Réalisé", line=dict(color="#111827",width=2.5)))
-
-    if horizon > 0:
-        base_enc = encaissements.iloc[-3:].mean() if len(encaissements)>=3 else (encaissements.mean() if len(encaissements) else 0)
-        base_dec = decaissements.iloc[-3:].mean() if len(decaissements)>=3 else (decaissements.mean() if len(decaissements) else 0)
-        col_sc1,col_sc2,col_sc3,col_sc4 = st.columns(4)
-        t_opt  = col_sc1.number_input("Croissance encaissements optimiste (%/mois)", value=4.0, step=0.5)/100
-        t_cent = col_sc2.number_input("Croissance encaissements central (%/mois)", value=2.0, step=0.5)/100
-        t_pess = col_sc3.number_input("Croissance encaissements pessimiste (%/mois)", value=0.0, step=0.5)/100
-        t_ch   = col_sc4.number_input("Évolution charges (%/mois)", value=1.0, step=0.5)/100
-        for nom, tc, col_hex in [("Optimiste",t_opt,"#10B981"),("Central",t_cent,"#3B82F6"),("Pessimiste",t_pess,"#EF4444")]:
-            futurs = [mois[-1]+i for i in range(1,horizon+1)]
-            enc_f = base_enc; dec_f = base_dec; proj = []
-            for m_f in futurs:
-                enc_f *= (1+tc); dec_f *= (1+t_ch); proj.append(enc_f-dec_f)
-            treso_proj = treso.iloc[-1] + pd.Series(proj, index=futurs).cumsum()
-            treso_full = pd.concat([treso.iloc[[-1]], treso_proj])
-            fig_t.add_trace(go.Scatter(x=[ml(m) for m in treso_full.index], y=treso_full.values,
-                                       name=nom, line=dict(color=col_hex,width=2,dash="dot")))
-
-    fig_t.add_hline(y=0, line_dash="dash", line_color="gray")
-    fig_t.update_layout(height=380, margin=dict(t=20), xaxis_title="", yaxis_title="€",
-                        legend=dict(orientation="h"))
-    st.plotly_chart(fig_t, use_container_width=True)
-
-# ── DROITS D'AUTEURS (EC) ──
 elif role == "ec" and page == "✍️ Droits d'auteurs":
     df, params = check_pivot()
     dos = get_dossier(st.session_state["dossier_id"])
