@@ -60,7 +60,7 @@ def fmt_fr(x, decimals=0):
 #   "ec_users": { "login": {"pw_hash": ..., "name": ..., "role": "ec"} },
 #   "dossiers": {
 #     "id_dossier": {
-#       "nom": "L'Edition Libre",
+#       "nom": "L'édition Libre",
 #       "dirigeant": "Thomas Bernard",
 #       "exercice": "2025/2026",
 #       "param_comptes": {...},
@@ -1192,7 +1192,7 @@ elif role == "ec" and page == "⚙️ Paramétrage analytique":
         df["Date"]   = pd.to_datetime(df["Date"], errors="coerce")
         df["Débit"]  = pd.to_numeric(df["Débit"], errors="coerce").fillna(0)
         df["Crédit"] = pd.to_numeric(df["Crédit"], errors="coerce").fillna(0)
-        df["Compte"] = df["Compte"].astype(str).str.strip()
+        df["Compte"] = df["Compte"].astype(str).str.replace(r'\.0$', '', regex=True).str.strip()
 
         def sc(s): return [c.strip() for c in s.split(",") if c.strip()]
 
