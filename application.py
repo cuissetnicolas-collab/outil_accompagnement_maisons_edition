@@ -60,7 +60,7 @@ def fmt_fr(x, decimals=0):
 #   "ec_users": { "login": {"pw_hash": ..., "name": ..., "role": "ec"} },
 #   "dossiers": {
 #     "id_dossier": {
-#       "nom": "L'édition Libre",
+#       "nom": "L'Edition Libre",
 #       "dirigeant": "Thomas Bernard",
 #       "exercice": "2025/2026",
 #       "param_comptes": {...},
@@ -3701,7 +3701,7 @@ elif role == "ec" and page == "📋 Plan d'action":
                     for c in range(1,11): ws_pa.cell(row=r_,column=c).fill=_fill("FFFFFF")
 
                 # Titre
-                _mg(ws_pa,2,2,3,9,"OUTIL 8 — PLAN D'ACTION STRUCTURÉ",bg=MARINE_PA,bold=True,size=15,color="FFFFFF")
+                _mg(ws_pa,2,2,3,9,"PLAN D'ACTION STRUCTURÉ",bg=MARINE_PA,bold=True,size=15,color="FFFFFF")
                 ws_pa.row_dimensions[2].height=26; ws_pa.row_dimensions[3].height=26
                 _mg(ws_pa,4,2,4,9,
                     f"CAB ÉDITION  /  {NOM_PA} — Exercice {EXER_PA}  |  "
